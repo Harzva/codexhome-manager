@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/registry-report.schema.json",
+  "title": "CodexHome Registry Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "registryPath", "revision", "homes", "safety"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.registry-report.v1" },
+    "registryPath": { "type": "string" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "homes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/homeView" }
+    },
+    "safety": { "$ref": "discovery-report.schema.json#/$defs/safety" }
+  },
+  "$defs": {
+    "homeView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "alias", "label", "path", "specialties", "origin",
+        "available", "summary", "issues"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "alias": { "type": "string", "pattern": "^@[a-z][a-z0-9-]{1,31}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "path": { "type": "string" },
+        "specialties": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 48 }
+        },
+        "origin": { "enum": ["created", "imported", "cloned"] },
+        "derivedFrom": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "available": { "type": "boolean" },
+        "summary": {
+          "oneOf": [
+            { "$ref": "discovery-report.schema.json#/$defs/home" },
+            { "type": "null" }
+          ]
+        },
+        "issues": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

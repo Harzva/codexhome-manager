@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/home-mutation.schema.json",
+  "title": "CodexHome Home Mutation Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok", "schemaVersion", "action", "dryRun", "registryRevision",
+    "entry", "copySummary", "plannedActions", "warnings"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.home-mutation.v1" },
+    "action": { "enum": ["create", "import", "clone"] },
+    "dryRun": { "type": "boolean" },
+    "registryRevision": { "type": "integer", "minimum": 0 },
+    "entry": { "$ref": "registry.schema.json#/$defs/entry" },
+    "copySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filesCopied", "directoriesCreated", "filesSkipped", "bytesCopied"],
+      "properties": {
+        "filesCopied": { "type": "integer", "minimum": 0 },
+        "directoriesCreated": { "type": "integer", "minimum": 0 },
+        "filesSkipped": { "type": "integer", "minimum": 0 },
+        "bytesCopied": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "plannedActions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

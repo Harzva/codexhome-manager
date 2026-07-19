@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0-alpha.1]
+
+### Added
+
+- Atomic persistent Home registry with revisions and Unix permission hardening.
+- Unique `@alias` routing names, family labels, and Unicode specialty tags.
+- `registry list`, `registry show`, and `registry path` commands.
+- Safe `home create`, `home import`, and `home clone` commands.
+- Dry-run plans, rollback, capability copy limits, JSON errors, and Desktop adapter contracts.
+- Registry, registry-report, and Home-mutation JSON Schemas.
+- Tauri Desktop UI with Home cards, search, live registry refresh, and dry-run-first lifecycle forms.
+
+### Security
+
+- Authentication, sessions, state, logs, plugins, provider endpoints, and provider credentials are excluded from clones.
+- Capability clones skip symlinks and common credential filenames.
+
+## [0.1.0-alpha.1]
+
 ### Added
 
 - Initial Rust workspace.

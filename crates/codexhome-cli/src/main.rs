@@ -1,6 +1,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use codexhome_core::{discover, doctor, CodexHomeSummary, DiscoveryOptions, DiscoveryReport};
+use codexhome_core::{
+    discover, doctor, CodexHomeSummary, DiscoveryOptions, DiscoveryReport, HomeManager,
+    HomeMutationResult, RegisteredHomeView, RegistryReport, RegistryStore,
+};
 use serde_json::json;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,12 +13,17 @@ use std::process::ExitCode;
     name = "codexhome",
     version,
     about = "Discover and manage specialized Codex Homes",
-    long_about = "Discover and inspect multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output."
+    long_about = "Discover, register, and manage multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output.",
+    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome home import /path/to/home --alias @research --specialty papers\n  codexhome home clone @research @reviewer --path /path/to/reviewer --dry-run"
 )]
 struct Cli {
     /// Add a CODEX_HOME candidate without changing the active shell environment.
     #[arg(long, global = true, value_name = "PATH")]
     home: Vec<PathBuf>,
+
+    /// Override the registry file (or set CODEXHOME_REGISTRY).
+    #[arg(long, global = true, value_name = "FILE")]
+    registry: Option<PathBuf>,
 
     /// Emit stable machine-readable JSON to stdout.
     #[arg(long, global = true)]
@@ -30,7 +38,7 @@ enum Command {
     /// Discover local Codex Homes and summarize their capabilities.
     Scan,
 
-    /// Inspect one Home by ID, label, provider, or absolute path.
+    /// Inspect one discovered Home by ID, label, provider, or absolute path.
     Inspect {
         /// ID, label, provider, or path returned by `codexhome scan`.
         target: String,
@@ -38,35 +46,156 @@ enum Command {
 
     /// Check discovered Homes for common configuration problems.
     Doctor,
+
+    /// Read the persistent Home registry used by aliases and the future Desktop UI.
+    Registry {
+        #[command(subcommand)]
+        command: RegistryCommand,
+    },
+
+    /// Create, import, or safely clone registered Homes.
+    Home {
+        #[command(subcommand)]
+        command: HomeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RegistryCommand {
+    /// List registered Homes with live availability and capability summaries.
+    List,
+
+    /// Show one registered Home by @alias, ID, label, or path.
+    Show {
+        /// Registered @alias, ID, label, or absolute path.
+        target: String,
+    },
+
+    /// Print the active registry file path.
+    Path,
+}
+
+#[derive(Debug, Subcommand)]
+enum HomeCommand {
+    /// Create and register a new empty Home.
+    Create {
+        /// Unique family alias, for example @frontend.
+        alias: String,
+
+        /// Absolute path for the new CODEX_HOME.
+        #[arg(long, value_name = "PATH")]
+        path: PathBuf,
+
+        /// Human-readable family name.
+        #[arg(long, value_name = "NAME")]
+        label: Option<String>,
+
+        /// Specialty tag; repeat for more than one.
+        #[arg(long, value_name = "TAG")]
+        specialty: Vec<String>,
+
+        /// Validate and print the plan without changing files or the registry.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Register an existing Home without modifying it.
+    Import {
+        /// Existing CODEX_HOME directory.
+        path: PathBuf,
+
+        /// Unique family alias, for example @research.
+        #[arg(long)]
+        alias: String,
+
+        /// Human-readable family name.
+        #[arg(long, value_name = "NAME")]
+        label: Option<String>,
+
+        /// Specialty tag; repeat for more than one.
+        #[arg(long, value_name = "TAG")]
+        specialty: Vec<String>,
+
+        /// Validate and print the plan without changing the registry.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Safely clone a registered Home without copying authentication or sessions.
+    Clone {
+        /// Source @alias, ID, label, or registered path.
+        source: String,
+
+        /// Unique alias for the cloned family.
+        alias: String,
+
+        /// Absolute path for the cloned CODEX_HOME.
+        #[arg(long, value_name = "PATH")]
+        path: PathBuf,
+
+        /// Human-readable family name.
+        #[arg(long, value_name = "NAME")]
+        label: Option<String>,
+
+        /// Specialty tag; repeat for more than one.
+        #[arg(long, value_name = "TAG")]
+        specialty: Vec<String>,
+
+        /// Copy Skills, Rules, and Hooks after secret-name and symlink filtering.
+        #[arg(long)]
+        copy_capabilities: bool,
+
+        /// Validate and inspect the copy plan without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = Cli::parse();
+    let json_errors = cli.json;
+    match run(cli) {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("error: {error:#}");
+            if json_errors {
+                let envelope = json!({
+                    "ok": false,
+                    "schemaVersion": "codexhome.error.v1",
+                    "error": {
+                        "code": "command_failed",
+                        "message": format!("{error:#}"),
+                    }
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&envelope)
+                        .unwrap_or_else(|_| "{\"ok\":false}".to_owned())
+                );
+            } else {
+                eprintln!("error: {error:#}");
+            }
             ExitCode::from(2)
         }
     }
 }
 
 fn run(cli: Cli) -> Result<ExitCode> {
-    let options = DiscoveryOptions::from_environment(cli.home)
-        .context("failed to prepare CODEX_HOME discovery")?;
-    let report = discover(&options);
-
-    match cli.command {
+    let Cli {
+        home,
+        registry,
+        json,
+        command,
+    } = cli;
+    match command {
         Command::Scan => {
-            if cli.json {
-                print_json(&report)?;
-            } else {
-                print_scan(&report);
-            }
+            let report = discovery(home)?;
+            output(json, &report, || print_scan(&report))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Inspect { target } => {
+            let report = discovery(home)?;
             let home = find_home(&report, &target)?;
-            if cli.json {
+            if json {
                 print_json(&json!({
                     "ok": true,
                     "schemaVersion": "codexhome.inspect.v1",
@@ -79,18 +208,112 @@ fn run(cli: Cli) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Doctor => {
-            let report = doctor(report);
-            if cli.json {
-                print_json(&report)?;
-            } else {
-                print_doctor(&report);
-            }
+            let report = doctor(discovery(home)?);
+            output(json, &report, || print_doctor(&report))?;
             Ok(if report.ok {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::from(1)
             })
         }
+        Command::Registry { command } => run_registry(command, registry, json),
+        Command::Home { command } => run_home(command, registry, json),
+    }
+}
+
+fn discovery(additional_homes: Vec<PathBuf>) -> Result<DiscoveryReport> {
+    let options = DiscoveryOptions::from_environment(additional_homes)
+        .context("failed to prepare CODEX_HOME discovery")?;
+    Ok(discover(&options))
+}
+
+fn run_registry(
+    command: RegistryCommand,
+    registry_path: Option<PathBuf>,
+    json: bool,
+) -> Result<ExitCode> {
+    let store = RegistryStore::from_environment(registry_path)?;
+    match command {
+        RegistryCommand::List => {
+            let report = store.report()?;
+            output(json, &report, || print_registry(&report))?;
+        }
+        RegistryCommand::Show { target } => {
+            let report = store.report()?;
+            let home = find_registered_home(&report, &target)?;
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.registered-home.v1",
+                    "registryPath": report.registry_path,
+                    "home": home,
+                    "safety": report.safety,
+                }))?;
+            } else {
+                print_registered_home(home);
+            }
+        }
+        RegistryCommand::Path => {
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.registry-path.v1",
+                    "registryPath": store.path().to_string_lossy(),
+                    "includesLocalPaths": true,
+                }))?;
+            } else {
+                println!("{}", store.path().display());
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_home(command: HomeCommand, registry_path: Option<PathBuf>, json: bool) -> Result<ExitCode> {
+    let manager = HomeManager::new(RegistryStore::from_environment(registry_path)?);
+    let result = match command {
+        HomeCommand::Create {
+            alias,
+            path,
+            label,
+            specialty,
+            dry_run,
+        } => manager.create(&alias, label.as_deref(), &path, specialty, dry_run)?,
+        HomeCommand::Import {
+            path,
+            alias,
+            label,
+            specialty,
+            dry_run,
+        } => manager.import(&path, &alias, label.as_deref(), specialty, dry_run)?,
+        HomeCommand::Clone {
+            source,
+            alias,
+            path,
+            label,
+            specialty,
+            copy_capabilities,
+            dry_run,
+        } => manager.clone_home(
+            &source,
+            &alias,
+            label.as_deref(),
+            &path,
+            specialty,
+            copy_capabilities,
+            dry_run,
+        )?,
+    };
+    output(json, &result, || print_mutation(&result))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+fn output(value_is_json: bool, value: &impl serde::Serialize, human: impl FnOnce()) -> Result<()> {
+    if value_is_json {
+        print_json(value)
+    } else {
+        human();
+        Ok(())
     }
 }
 
@@ -125,6 +348,31 @@ fn find_home<'a>(report: &'a DiscoveryReport, target: &str) -> Result<&'a CodexH
     }
 }
 
+fn find_registered_home<'a>(
+    report: &'a RegistryReport,
+    target: &str,
+) -> Result<&'a RegisteredHomeView> {
+    let matches = report
+        .homes
+        .iter()
+        .filter(|home| home.entry.matches(target))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [home] => Ok(home),
+        [] => bail!(
+            "registered Home '{target}' was not found; run `codexhome registry list` or import it first"
+        ),
+        _ => {
+            let aliases = matches
+                .iter()
+                .map(|home| home.entry.alias.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!("registered Home '{target}' is ambiguous; use one of: {aliases}")
+        }
+    }
+}
+
 fn print_json(value: &impl serde::Serialize) -> Result<()> {
     println!(
         "{}",
@@ -155,6 +403,110 @@ fn print_scan(report: &DiscoveryReport) {
     print_warnings(&report.warnings);
     println!();
     println!("Safety: credential contents were not read or printed.");
+}
+
+fn print_registry(report: &RegistryReport) {
+    println!(
+        "CodexHome Registry · {} Home(s) · revision {}",
+        report.homes.len(),
+        report.revision
+    );
+    println!("{}", report.registry_path);
+    if report.homes.is_empty() {
+        println!();
+        println!("No registered Homes.");
+        println!("Try: codexhome home import /path/to/home --alias @research");
+        return;
+    }
+    println!();
+    for home in &report.homes {
+        let state = if home.available { "ready" } else { "missing" };
+        let specialties = if home.entry.specialties.is_empty() {
+            "general".to_owned()
+        } else {
+            home.entry.specialties.join(",")
+        };
+        println!(
+            "{}  {}  [{}]  specialties={}",
+            home.entry.alias, home.entry.label, state, specialties
+        );
+        println!("  {}", home.entry.path);
+        if let Some(summary) = &home.summary {
+            println!(
+                "  provider={} skills={} mcp={}",
+                display(summary.provider.as_deref()),
+                summary.skill_count,
+                summary.mcp_server_count
+            );
+        }
+        for issue in &home.issues {
+            println!("  warning: {issue}");
+        }
+    }
+}
+
+fn print_registered_home(home: &RegisteredHomeView) {
+    println!("{} · {}", home.entry.alias, home.entry.label);
+    println!("  Registry ID:      {}", home.entry.id);
+    println!("  Path:             {}", home.entry.path);
+    println!("  Origin:           {:?}", home.entry.origin);
+    println!(
+        "  Specialties:      {}",
+        if home.entry.specialties.is_empty() {
+            "general".to_owned()
+        } else {
+            home.entry.specialties.join(", ")
+        }
+    );
+    println!(
+        "  Availability:     {}",
+        if home.available { "ready" } else { "missing" }
+    );
+    if let Some(summary) = &home.summary {
+        println!();
+        print_home(summary);
+    }
+    for issue in &home.issues {
+        println!("  Warning: {issue}");
+    }
+}
+
+fn print_mutation(result: &HomeMutationResult) {
+    let mode = if result.dry_run { "DRY RUN" } else { "DONE" };
+    println!(
+        "[{mode}] {} {} · {}",
+        result.action, result.entry.alias, result.entry.label
+    );
+    println!("  Path:                {}", result.entry.path);
+    println!(
+        "  Specialties:         {}",
+        if result.entry.specialties.is_empty() {
+            "general".to_owned()
+        } else {
+            result.entry.specialties.join(", ")
+        }
+    );
+    println!("  Registry revision:   {}", result.registry_revision);
+    println!(
+        "  Files copied:        {}",
+        result.copy_summary.files_copied
+    );
+    println!(
+        "  Files skipped:       {}",
+        result.copy_summary.files_skipped
+    );
+    println!();
+    println!("Plan:");
+    for action in &result.planned_actions {
+        println!("  - {action}");
+    }
+    if !result.warnings.is_empty() {
+        println!();
+        println!("Warnings:");
+        for warning in &result.warnings {
+            println!("  - {warning}");
+        }
+    }
 }
 
 fn print_home(home: &CodexHomeSummary) {

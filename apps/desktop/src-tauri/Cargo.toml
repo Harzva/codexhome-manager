@@ -1,0 +1,24 @@
+[package]
+name = "codexhome-desktop"
+version = "0.2.0-alpha.1"
+description = "Desktop manager for specialized Codex Homes"
+authors = ["Harzva"]
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+
+[lib]
+name = "codexhome_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "codexhome-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+codexhome-core = { path = "../../../crates/codexhome-core" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.10", features = [] }

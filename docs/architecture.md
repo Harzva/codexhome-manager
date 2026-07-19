@@ -18,16 +18,18 @@ Discovery Skill router   Task router
 CODEX_HOME directories   isolated workers
 ```
 
-- `codexhome-core` contains discovery and redacted inspection logic without terminal concerns.
+- `codexhome-core` contains discovery, the atomic registry, and safe Home lifecycle logic without terminal concerns.
 - `codexhome-cli` is the first adapter. It keeps JSON output clean and exposes useful process exit codes.
-- Registry, placement, execution, MCP, and desktop adapters arrive in later milestones.
+- Placement, execution, MCP, and desktop adapters arrive in later milestones.
+
+The v0.2 registry is the shared boundary between CLI and the future Desktop UI. Adapters call core operations or versioned JSON commands; they do not edit the registry directly.
 
 ## Trust boundaries
 
 1. A Home owns its own credentials. Credentials are never copied to a parent, sibling, child member, report, or event log.
 2. Discovery may read `config.toml`, but it emits only an allowlist of non-secret fields. Provider URLs are reduced to hostnames.
 3. Discovery checks only whether `auth.json` exists; it never opens that file.
-4. Any future mutation must support preview, explicit confirmation, verification, and rollback.
+4. Home lifecycle mutations support dry-run and rollback; future Skill/MCP/Hook mutations must add explicit confirmation and post-write verification.
 5. Household delegation is limited to L0 (user/main), L1 (specialized Home), and L2 (temporary members). L3 creation is denied by default.
 
 ## Household execution model

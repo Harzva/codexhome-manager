@@ -6,6 +6,15 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod home;
+mod registry;
+
+pub use home::{CopySummary, HomeManager, HomeMutationResult};
+pub use registry::{
+    normalize_alias, normalize_specialties, RegisteredHomeView, Registry, RegistryEntry,
+    RegistryOrigin, RegistryReport, RegistryStore,
+};
+
 pub const DISCOVERY_SCHEMA_VERSION: &str = "codexhome.discovery.v1";
 pub const DOCTOR_SCHEMA_VERSION: &str = "codexhome.doctor.v1";
 
@@ -265,6 +274,16 @@ pub fn doctor(discovery: DiscoveryReport) -> DoctorReport {
     }
 }
 
+pub fn inspect_home_path(
+    path: &Path,
+    source: &str,
+) -> Result<(CodexHomeSummary, Option<DiscoveryWarning>)> {
+    if !looks_like_codex_home(path) {
+        anyhow::bail!("{} is not a recognizable Codex Home", path.display());
+    }
+    Ok(inspect_home(path, source))
+}
+
 fn inspect_home(path: &Path, source: &str) -> (CodexHomeSummary, Option<DiscoveryWarning>) {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let id = stable_id(&canonical);
@@ -410,14 +429,14 @@ fn looks_like_codex_home(path: &Path) -> bool {
             || path.join("skills").is_dir())
 }
 
-fn user_home() -> Option<PathBuf> {
+pub(crate) fn user_home() -> Option<PathBuf> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
 }
 
-fn expand_home(path: &Path, user_home: &Path) -> PathBuf {
+pub(crate) fn expand_home(path: &Path, user_home: &Path) -> PathBuf {
     let raw = path.to_string_lossy();
     if raw == "~" {
         return user_home.to_path_buf();
@@ -428,7 +447,7 @@ fn expand_home(path: &Path, user_home: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn stable_id(path: &Path) -> String {
+pub(crate) fn stable_id(path: &Path) -> String {
     let mut digest = Sha256::new();
     digest.update(path.to_string_lossy().as_bytes());
     format!("{:x}", digest.finalize())[..12].to_owned()

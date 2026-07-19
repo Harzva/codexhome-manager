@@ -17,6 +17,15 @@ The scanner uses an allowlist. It may report model name, provider display name, 
 
 Discovery output includes local Home paths and may include provider hostnames. Treat reports as local diagnostic data and review them before posting publicly.
 
+## Home lifecycle boundary
+
+- Import never changes source Home files.
+- Create never creates or copies authentication.
+- Clone copies only allowlisted non-provider settings by default.
+- `--copy-capabilities` is explicit and limited to Skills, Rules, and Hooks; symlinks and common credential filenames are skipped.
+- Clone never copies `auth.json`, sessions, state databases, logs, plugins, provider endpoints, or provider credentials.
+- Dry-run performs validation and size inspection without changing the Home or registry.
+
 ## Execution boundary
 
 Future execution features must:

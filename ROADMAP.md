@@ -2,7 +2,7 @@
 
 The detailed product roadmap was developed before repository initialization. This repository tracks the implementation in smaller release milestones.
 
-## v0.1 — Discovery foundation
+## v0.1 — Discovery foundation ✅
 
 - Cross-platform Home discovery.
 - Safe config inspection.
@@ -10,15 +10,19 @@ The detailed product roadmap was developed before repository initialization. Thi
 - `scan`, `inspect`, and `doctor` commands.
 - Public schemas and redaction tests.
 
-## v0.2 — Registry and Skill Spaces
+## v0.2 — Registry and Skill Spaces ✅
 
 - Agent aliases and capability summaries.
-- Skill Space manifests and capacity budgets.
 - Home creation, import, clone, and validation.
-- Shared Skill Pack references and lockfile.
+- Atomic user-level registry with revision numbers.
+- Family labels, Unicode specialty tags, dry-run, and rollback.
+- Desktop read/mutation contracts.
+- Tauri Desktop UI connected directly to `codexhome-core`.
 
 ## v0.3 — Skill placement
 
+- Skill Space manifests and capacity budgets.
+- Shared Skill Pack references and lockfile.
 - Skill Classifier.
 - Hard-constraint validation.
 - Top-three Home recommendations with explainable scores.
