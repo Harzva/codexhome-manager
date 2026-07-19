@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/discovery-report.schema.json",
+  "title": "CodexHome Discovery Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "homes", "warnings", "safety"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "schemaVersion": { "const": "codexhome.discovery.v1" },
+    "homes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/home" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/warning" }
+    },
+    "safety": { "$ref": "#/$defs/safety" }
+  },
+  "$defs": {
+    "home": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "label", "path", "source", "model", "provider",
+        "endpointHost", "reasoningEffort", "approvalPolicy", "sandboxMode",
+        "webSearch", "hasAuth", "hasConfig", "configValid", "skillCount",
+        "pluginCount", "mcpServerCount", "enabledFeatureCount", "ruleCount",
+        "hookCount"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "label": { "type": "string" },
+        "path": { "type": "string" },
+        "source": { "type": "string" },
+        "model": { "type": ["string", "null"] },
+        "provider": { "type": ["string", "null"] },
+        "endpointHost": { "type": ["string", "null"] },
+        "reasoningEffort": { "type": ["string", "null"] },
+        "approvalPolicy": { "type": ["string", "null"] },
+        "sandboxMode": { "type": ["string", "null"] },
+        "webSearch": { "type": ["string", "null"] },
+        "hasAuth": { "type": "boolean" },
+        "hasConfig": { "type": "boolean" },
+        "configValid": { "type": "boolean" },
+        "skillCount": { "type": "integer", "minimum": 0 },
+        "pluginCount": { "type": "integer", "minimum": 0 },
+        "mcpServerCount": { "type": "integer", "minimum": 0 },
+        "enabledFeatureCount": { "type": "integer", "minimum": 0 },
+        "ruleCount": { "type": "integer", "minimum": 0 },
+        "hookCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "homeId", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "homeId": { "type": ["string", "null"] },
+        "message": { "type": "string" }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretsRedacted", "includesSecrets", "readsAuthContents",
+        "includesLocalPaths"
+      ],
+      "properties": {
+        "secretsRedacted": { "const": true },
+        "includesSecrets": { "const": false },
+        "readsAuthContents": { "const": false },
+        "includesLocalPaths": { "const": true }
+      }
+    }
+  }
+}
