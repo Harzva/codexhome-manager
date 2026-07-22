@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a reproducible CodexHome Manager problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve CodexHome Manager. Never paste tokens, `auth.json`, `.env` values, raw sessions, or unredacted private paths.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: codexhome 0.2.0-alpha.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - CLI
+        - Desktop UI
+        - Registry or schemas
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Give minimal redacted steps and the expected result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Redacted output
+      description: Remove credentials, account identifiers, provider secrets, and private paths first.
+      render: shell
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I verified that this report contains no credentials or private session data.
+          required: true

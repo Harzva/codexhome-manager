@@ -1,8 +1,14 @@
 # CodexHome Manager
 
-CodexHome Manager turns multiple `CODEX_HOME` directories into discoverable Skill Spaces and specialized Agent Households.
+[![CI](https://github.com/harzva/codexhome-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/harzva/codexhome-manager/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-176b50.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.2.0--alpha.1-8a5a20.svg)](RELEASE_NOTES.md)
 
-> Status: v0.2 alpha. Discovery, the persistent Home registry, aliases, specialty tags, and safe Home lifecycle commands work. Delegation, Skill placement, MCP routing, and the desktop app are roadmap work.
+**One machine, many specialist Codex families.**
+
+CodexHome Manager helps Codex power users discover, separate, label, clone, and manage multiple `CODEX_HOME` directories as isolated Skill Spaces and specialized Agent Households.
+
+> Status: v0.2 alpha. Discovery, registry aliases, specialty tags, safe Home lifecycle commands, and the connected Desktop UI work. Agent delegation, Skill placement, and MCP routing are roadmap work.
 
 ## Why
 
@@ -31,7 +37,7 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Create new Homes, import existing Homes, and safely clone registered Homes.
 - Preview every lifecycle mutation with `--dry-run`.
 
-## Install for development
+## Five-minute quickstart
 
 Requirements:
 
@@ -42,13 +48,20 @@ Requirements:
 git clone https://github.com/harzva/codexhome-manager.git
 cd codexhome-manager
 cargo install --path crates/codexhome-cli
+codexhome scan
 ```
 
-Run without installing:
+Register one discovered Home without changing it:
 
 ```bash
-cargo run -p codexhome-cli -- scan
+codexhome home import /absolute/path/to/home \
+  --alias @research \
+  --label "Research Family" \
+  --specialty papers \
+  --dry-run
 ```
+
+The dry-run prints the exact registry action and warnings. Repeat without `--dry-run` only after reviewing the plan.
 
 ## Commands
 
@@ -126,6 +139,23 @@ cd apps/desktop
 npm install
 npm run tauri dev
 ```
+
+For frontend-only development, use `npm run dev`. See [docs/troubleshooting.md](docs/troubleshooting.md) when platform or dependency setup fails.
+
+## Documentation
+
+- [Architecture and trust boundaries](docs/architecture.md)
+- [Registry format and lifecycle semantics](docs/registry.md)
+- [Desktop adapter contract](docs/desktop-api.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Product readiness audit](docs/product-readiness-v0.2.md)
+- [Security and privacy audit](docs/security-audit-v0.2.md)
+- [Roadmap](ROADMAP.md)
+- [Release notes](RELEASE_NOTES.md)
+
+## Contributing and support
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [SUPPORT.md](SUPPORT.md) before filing an issue. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Name and trademark
 

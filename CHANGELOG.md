@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Three-platform Rust CI plus Desktop frontend and macOS Tauri bridge checks.
+- Dependabot for Cargo, npm, and GitHub Actions dependencies.
+- Public contribution, support, troubleshooting, release, and audit documentation.
+- Structured issue and pull request templates with credential-safety reminders.
+
+### Security
+
+- CI uses a read-only token and pinned external actions.
+- GitHub private vulnerability reporting replaces public security issues.
+
 ## [0.2.0-alpha.1]
 
 ### Added

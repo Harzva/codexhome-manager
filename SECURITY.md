@@ -39,4 +39,10 @@ Future execution features must:
 
 ## Reporting a vulnerability
 
-Do not include real credentials, private sessions, or sensitive local paths in a public report. Open a minimal redacted issue after a private reporting channel is published.
+Use [GitHub private vulnerability reporting](https://github.com/harzva/codexhome-manager/security/advisories/new). Do not open a public issue for a vulnerability and do not include real credentials, private sessions, or sensitive local paths in public discussion.
+
+If a real credential was committed or posted, revoke or rotate it immediately. Removing it from the latest commit is not sufficient because Git history and notification copies may retain it.
+
+## Data retention and telemetry
+
+CodexHome Manager has no telemetry, analytics, hosted service, or remote log upload. The registry remains on the local machine until the user deletes it. Create and clone roll back newly created destinations after a failed registry commit; imported Homes remain owned by the user and are never deleted by import.
