@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">CodexHome Manager</title>
+  <desc id="desc">A connected family of specialist agents inside a home.</desc>
+  <defs>
+    <linearGradient id="background" x1="80" y1="48" x2="432" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#203C32"/>
+      <stop offset="1" stop-color="#10271F"/>
+    </linearGradient>
+    <linearGradient id="home" x1="154" y1="139" x2="367" y2="376" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B5F3D5"/>
+      <stop offset="1" stop-color="#73D8A9"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#071711" flood-opacity=".34"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#background)"/>
+  <path d="M56 352C137 410 265 450 457 377V512H56Z" fill="#294B3E" opacity=".42"/>
+  <circle cx="409" cy="103" r="60" fill="#4F9C7C" opacity=".12"/>
+
+  <g filter="url(#shadow)">
+    <path d="M132 246.5 256 139l124 107.5v137a24 24 0 0 1-24 24H156a24 24 0 0 1-24-24Z"
+      fill="#17372B" stroke="url(#home)" stroke-width="24" stroke-linejoin="round"/>
+    <path d="m105 259 151-130 151 130" fill="none" stroke="url(#home)" stroke-width="27" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <path d="M185 333h142M211 289l45 44 45-44" fill="none" stroke="#8EE4BA" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" opacity=".72"/>
+    <circle cx="211" cy="277" r="27" fill="#B5F3D5"/>
+    <circle cx="301" cy="277" r="27" fill="#B5F3D5"/>
+    <circle cx="256" cy="344" r="32" fill="#72D9A9" stroke="#C9F8E2" stroke-width="9"/>
+  </g>
+
+  <path d="M152 90h67" stroke="#9DE7C5" stroke-width="14" stroke-linecap="round" opacity=".55"/>
+  <circle cx="128" cy="90" r="7" fill="#9DE7C5" opacity=".55"/>
+</svg>
