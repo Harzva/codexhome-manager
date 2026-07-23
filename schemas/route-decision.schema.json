@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/route-decision.schema.json",
+  "title": "CodexHome Route Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "requestId",
+    "taskKind",
+    "policyId",
+    "policyRevision",
+    "evaluatedAtTimestampMs",
+    "observedEventCount",
+    "request",
+    "selected",
+    "evaluatedCandidates",
+    "eligibleCandidates",
+    "candidates",
+    "decisionReason",
+    "locks",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "schemaVersion": { "const": "codexhome.route-decision.v1" },
+    "requestId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "taskKind": { "$ref": "route-request.schema.json#/$defs/taskKind" },
+    "policyId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "policyRevision": { "type": "integer", "minimum": 0 },
+    "evaluatedAtTimestampMs": { "type": "integer", "minimum": 0 },
+    "observedEventCount": { "type": "integer", "minimum": 0 },
+    "request": { "$ref": "route-request.schema.json" },
+    "selected": {
+      "oneOf": [
+        { "$ref": "#/$defs/selection" },
+        { "type": "null" }
+      ]
+    },
+    "evaluatedCandidates": { "type": "integer", "minimum": 1 },
+    "eligibleCandidates": { "type": "integer", "minimum": 0 },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/candidateEvaluation" }
+    },
+    "decisionReason": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "locks": { "$ref": "#/$defs/locks" },
+    "safety": { "$ref": "#/$defs/safety" }
+  },
+  "$defs": {
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "identity",
+        "totalScoreBasisPoints",
+        "estimatedCostMicrousd",
+        "reasons"
+      ],
+      "properties": {
+        "candidateId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "identity": { "$ref": "observability-event.schema.json#/$defs/identity" },
+        "totalScoreBasisPoints": { "$ref": "#/$defs/basisPoints" },
+        "estimatedCostMicrousd": { "type": "integer", "minimum": 0 },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      }
+    },
+    "candidateEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "identity",
+        "eligible",
+        "totalScoreBasisPoints",
+        "estimatedCostMicrousd",
+        "historicalAttempts",
+        "historicalSuccessBasisPoints",
+        "activeAttempts",
+        "quotaRemainingBasisPoints",
+        "components",
+        "reasons",
+        "rejectionReasons"
+      ],
+      "properties": {
+        "candidateId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "identity": { "$ref": "observability-event.schema.json#/$defs/identity" },
+        "eligible": { "type": "boolean" },
+        "totalScoreBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "estimatedCostMicrousd": { "type": "integer", "minimum": 0 },
+        "historicalAttempts": { "type": "integer", "minimum": 0 },
+        "historicalSuccessBasisPoints": { "$ref": "#/$defs/basisPoints" },
+        "activeAttempts": { "type": "integer", "minimum": 0 },
+        "quotaRemainingBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/component" }
+        },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "rejectionReasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "scoreBasisPoints",
+        "weightBasisPoints",
+        "weightedPoints",
+        "reason"
+      ],
+      "properties": {
+        "name": { "$ref": "observability-event.schema.json#/$defs/label" },
+        "scoreBasisPoints": { "$ref": "#/$defs/basisPoints" },
+        "weightBasisPoints": { "$ref": "#/$defs/basisPoints" },
+        "weightedPoints": { "$ref": "#/$defs/basisPoints" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "locks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["home", "model", "sensitiveDirectory"],
+      "properties": {
+        "home": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+        "model": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+        "sensitiveDirectory": { "type": "boolean" }
+      }
+    },
+    "basisPoints": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretsRedacted",
+        "includesSecrets",
+        "readsAuthContents",
+        "includesLocalPaths"
+      ],
+      "properties": {
+        "secretsRedacted": { "const": true },
+        "includesSecrets": { "const": false },
+        "readsAuthContents": { "const": false },
+        "includesLocalPaths": { "const": false }
+      }
+    }
+  }
+}

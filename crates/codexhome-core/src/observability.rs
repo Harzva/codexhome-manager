@@ -1,4 +1,4 @@
-use crate::{user_home, SafetySummary};
+use crate::{router::RouteRequest, user_home, SafetySummary};
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,7 @@ pub enum ObservabilityEventType {
     ToolCallCompleted,
     ArtifactCreated,
     VerificationCompleted,
+    RouteDecided,
     RunCompleted,
     RunFailed,
     QuotaSnapshot,
@@ -85,12 +86,72 @@ pub struct EventDetails {
     pub task: Option<TaskDescriptor>,
     pub budget: Option<RunBudget>,
     pub route_reason: Option<String>,
+    pub route_decision_id: Option<String>,
+    pub routing: Option<RouteDecisionDetails>,
     pub transition: Option<AttemptTransition>,
     pub artifact_id: Option<String>,
     pub verification_id: Option<String>,
     pub target_artifact_id: Option<String>,
     #[serde(default)]
     pub final_artifact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RouteDecisionDetails {
+    pub request_id: String,
+    pub policy_id: String,
+    pub policy_revision: u64,
+    pub evaluated_at_timestamp_ms: u64,
+    pub observed_event_count: u64,
+    pub request: RouteRequest,
+    pub selected_candidate_id: Option<String>,
+    pub selected_score_basis_points: Option<u16>,
+    pub estimated_cost_microusd: Option<u64>,
+    pub evaluated_candidates: u32,
+    pub eligible_candidates: u32,
+    #[serde(default)]
+    pub home_locked: bool,
+    #[serde(default)]
+    pub model_locked: bool,
+    #[serde(default)]
+    pub sensitive_directory: bool,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+    #[serde(default)]
+    pub rejection_summary: Vec<String>,
+    #[serde(default)]
+    pub candidates: Vec<RouteCandidateDecisionSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RouteCandidateDecisionSnapshot {
+    pub candidate_id: String,
+    pub identity: ExecutionIdentity,
+    pub eligible: bool,
+    pub total_score_basis_points: Option<u16>,
+    pub estimated_cost_microusd: u64,
+    pub historical_attempts: u64,
+    pub historical_success_basis_points: u16,
+    pub active_attempts: u64,
+    pub quota_remaining_basis_points: Option<u16>,
+    #[serde(default)]
+    pub components: Vec<RouteScoreSnapshot>,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+    #[serde(default)]
+    pub rejection_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RouteScoreSnapshot {
+    pub name: String,
+    pub score_basis_points: u16,
+    pub weight_basis_points: u16,
+    pub weighted_points: u16,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -343,6 +404,7 @@ pub struct ObservabilityTotals {
     pub runs: usize,
     pub attempts: usize,
     pub threads: usize,
+    pub route_decisions: u64,
     pub tool_calls: u64,
     pub artifacts: u64,
     pub verifications: u64,
@@ -575,7 +637,7 @@ pub fn parse_observability_events(input: &str) -> Result<Vec<ObservabilityEvent>
 
 pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
     let mut output = String::from(
-        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,transition_kind,from_attempt_id,artifact_id,verification_id,target_artifact_id,final_artifact_ids\n",
+        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties,routing_required_security_domain,routing_locked_home,routing_locked_model,routing_max_estimated_cost_microusd,routing_allow_degraded,routing_selected_candidate_id,routing_score_basis_points,transition_kind,from_attempt_id,artifact_id,verification_id,target_artifact_id,final_artifact_ids\n",
     );
     for event in events {
         let fields = [
@@ -657,6 +719,105 @@ pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             option(&event.details.route_reason),
+            option(&event.details.route_decision_id),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.request_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.policy_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.evaluated_at_timestamp_ms.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.observed_event_count.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| json_name(&routing.request.task_kind))
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.request.estimated_context_tokens.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.request.estimated_output_tokens.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.request.required_capabilities.join(";"))
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.request.preferred_specialties.join(";"))
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.request.required_security_domain.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.request.locked_home.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.request.locked_model.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.request.max_estimated_cost_microusd)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .map(|routing| routing.request.allow_degraded.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.selected_candidate_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.selected_score_basis_points)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             event
                 .details
                 .transition
@@ -758,6 +919,9 @@ impl Accumulator {
             self.threads.insert(value.clone());
         }
         match event.event_type {
+            ObservabilityEventType::RouteDecided => {
+                checked_add(&mut self.totals.route_decisions, 1, "route decision count")?
+            }
             ObservabilityEventType::ToolCallCompleted => {
                 checked_add(&mut self.totals.tool_calls, 1, "tool call count")?
             }
@@ -864,6 +1028,7 @@ struct TraceIndexes {
     terminal_runs: BTreeSet<String>,
     artifacts: BTreeMap<String, (String, String, String)>,
     verifications: BTreeSet<String>,
+    route_decisions: BTreeMap<String, (String, String, ExecutionIdentity)>,
     last_timestamp_by_run: BTreeMap<String, u64>,
 }
 
@@ -947,6 +1112,7 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
             let (task, run) = verify_run_link(event, &indexes.runs)?;
             let attempt = required("attemptId", attempt_id)?;
             verify_attempt_transition(event, indexes, task, run)?;
+            verify_route_decision_link(event, indexes, task, run)?;
             if indexes
                 .attempts
                 .insert(attempt.to_owned(), (task.to_owned(), run.to_owned()))
@@ -994,6 +1160,38 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
                         parent
                     );
                 }
+            }
+        }
+        ObservabilityEventType::RouteDecided => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let routing = event
+                .details
+                .routing
+                .as_ref()
+                .context("route_decided is missing routing details")?;
+            let observed_event_count = usize::try_from(routing.observed_event_count)
+                .context("route decision observedEventCount exceeds usize")?;
+            let prior_event_count = indexes.events.len().saturating_sub(1);
+            if observed_event_count != prior_event_count {
+                bail!(
+                    "event {} route decision observed {} event(s), but {} preceded it",
+                    event.event_id,
+                    observed_event_count,
+                    prior_event_count
+                );
+            }
+            if indexes
+                .route_decisions
+                .insert(
+                    event.event_id.clone(),
+                    (task.to_owned(), run.to_owned(), event.identity.clone()),
+                )
+                .is_some()
+            {
+                bail!(
+                    "route decision '{}' is recorded more than once",
+                    event.event_id
+                );
             }
         }
         ObservabilityEventType::AttemptCompleted
@@ -1237,6 +1435,59 @@ fn verify_attempt_transition(
     Ok(())
 }
 
+fn verify_route_decision_link(
+    event: &ObservabilityEvent,
+    indexes: &TraceIndexes,
+    task: &str,
+    run: &str,
+) -> Result<()> {
+    let Some(route_decision_id) = &event.details.route_decision_id else {
+        return Ok(());
+    };
+    let (owner_task, owner_run, selected_identity) = indexes
+        .route_decisions
+        .get(route_decision_id)
+        .with_context(|| {
+            format!(
+                "event {} references unknown routeDecisionId '{}'",
+                event.event_id, route_decision_id
+            )
+        })?;
+    if owner_task != task || owner_run != run {
+        bail!(
+            "event {} routeDecisionId '{}' belongs to another task/run",
+            event.event_id,
+            route_decision_id
+        );
+    }
+    for (name, selected, actual) in [
+        (
+            "homeId",
+            selected_identity.home_id.as_deref(),
+            event.identity.home_id.as_deref(),
+        ),
+        (
+            "accountId",
+            selected_identity.account_id.as_deref(),
+            event.identity.account_id.as_deref(),
+        ),
+        (
+            "model",
+            selected_identity.model.as_deref(),
+            event.identity.model.as_deref(),
+        ),
+    ] {
+        if selected != actual {
+            bail!(
+                "event {} identity {name} does not match routeDecisionId '{}'",
+                event.event_id,
+                route_decision_id
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_event_details(event: &ObservabilityEvent) -> Result<()> {
     let details = &event.details;
     if let Some(task) = &details.task {
@@ -1275,6 +1526,81 @@ fn validate_event_details(event: &ObservabilityEvent) -> Result<()> {
         if event.event_type != ObservabilityEventType::AttemptStarted {
             bail!(
                 "event {} routeReason requires attempt_started",
+                event.event_id
+            );
+        }
+    }
+    if let Some(route_decision_id) = &details.route_decision_id {
+        validate_identifier("details.routeDecisionId", route_decision_id)?;
+        if event.event_type != ObservabilityEventType::AttemptStarted {
+            bail!(
+                "event {} routeDecisionId requires attempt_started",
+                event.event_id
+            );
+        }
+    }
+    if let Some(routing) = &details.routing {
+        if event.event_type != ObservabilityEventType::RouteDecided {
+            bail!(
+                "event {} routing details require route_decided",
+                event.event_id
+            );
+        }
+        validate_identifier("details.routing.requestId", &routing.request_id)?;
+        validate_identifier("details.routing.policyId", &routing.policy_id)?;
+        routing.request.validate()?;
+        if routing.request_id != routing.request.request_id {
+            bail!(
+                "event {} routing requestId disagrees with its request snapshot",
+                event.event_id
+            );
+        }
+        if routing.home_locked != routing.request.locked_home.is_some()
+            || routing.model_locked != routing.request.locked_model.is_some()
+            || routing.sensitive_directory != routing.request.sensitive_directory
+        {
+            bail!(
+                "event {} routing lock flags disagree with its request snapshot",
+                event.event_id
+            );
+        }
+        if let Some(candidate_id) = &routing.selected_candidate_id {
+            validate_identifier("details.routing.selectedCandidateId", candidate_id)?;
+        }
+        if routing
+            .selected_score_basis_points
+            .is_some_and(|score| score > 10_000)
+        {
+            bail!(
+                "event {} selected route score exceeds 10000",
+                event.event_id
+            );
+        }
+        if routing.eligible_candidates > routing.evaluated_candidates {
+            bail!(
+                "event {} has more eligible than evaluated route candidates",
+                event.event_id
+            );
+        }
+        validate_route_texts(event, "details.routing.reasons", &routing.reasons)?;
+        validate_route_texts(
+            event,
+            "details.routing.rejectionSummary",
+            &routing.rejection_summary,
+        )?;
+        validate_route_candidates(event, routing)?;
+        let selected = routing.selected_candidate_id.is_some()
+            && routing.selected_score_basis_points.is_some()
+            && routing.estimated_cost_microusd.is_some();
+        if event.status == ObservabilityStatus::Succeeded && !selected {
+            bail!(
+                "event {} successful route decision requires a selected candidate, score, and cost",
+                event.event_id
+            );
+        }
+        if event.status == ObservabilityStatus::Failed && routing.selected_candidate_id.is_some() {
+            bail!(
+                "event {} failed route decision cannot select a candidate",
                 event.event_id
             );
         }
@@ -1340,6 +1666,173 @@ fn validate_event_details(event: &ObservabilityEvent) -> Result<()> {
     Ok(())
 }
 
+fn validate_route_candidates(
+    event: &ObservabilityEvent,
+    routing: &RouteDecisionDetails,
+) -> Result<()> {
+    if routing.evaluated_at_timestamp_ms > event.timestamp_ms {
+        bail!(
+            "event {} route evaluation timestamp is after the recorded decision",
+            event.event_id
+        );
+    }
+    if routing.candidates.len() > 256 {
+        bail!("event {} has too many route candidates", event.event_id);
+    }
+    if routing.candidates.len() != routing.evaluated_candidates as usize {
+        bail!(
+            "event {} routing candidate snapshot count does not match evaluatedCandidates",
+            event.event_id
+        );
+    }
+    let eligible_count = routing
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.eligible)
+        .count();
+    if eligible_count != routing.eligible_candidates as usize {
+        bail!(
+            "event {} routing eligible snapshot count does not match eligibleCandidates",
+            event.event_id
+        );
+    }
+    let mut candidate_ids = BTreeSet::new();
+    for candidate in &routing.candidates {
+        validate_identifier(
+            "details.routing.candidates.candidateId",
+            &candidate.candidate_id,
+        )?;
+        if !candidate_ids.insert(candidate.candidate_id.as_str()) {
+            bail!(
+                "event {} repeats route candidate '{}'",
+                event.event_id,
+                candidate.candidate_id
+            );
+        }
+        required(
+            "details.routing.candidates.identity.homeId",
+            candidate.identity.home_id.as_deref(),
+        )?;
+        required(
+            "details.routing.candidates.identity.model",
+            candidate.identity.model.as_deref(),
+        )?;
+        if candidate.eligible != candidate.total_score_basis_points.is_some() {
+            bail!(
+                "event {} route candidate '{}' eligibility and score disagree",
+                event.event_id,
+                candidate.candidate_id
+            );
+        }
+        if candidate
+            .total_score_basis_points
+            .is_some_and(|score| score > 10_000)
+            || candidate.historical_success_basis_points > 10_000
+            || candidate
+                .quota_remaining_basis_points
+                .is_some_and(|quota| quota > 10_000)
+        {
+            bail!(
+                "event {} route candidate '{}' has a basis-point value above 10000",
+                event.event_id,
+                candidate.candidate_id
+            );
+        }
+        if candidate.eligible && !candidate.rejection_reasons.is_empty() {
+            bail!(
+                "event {} eligible route candidate '{}' has rejection reasons",
+                event.event_id,
+                candidate.candidate_id
+            );
+        }
+        if !candidate.eligible && candidate.rejection_reasons.is_empty() {
+            bail!(
+                "event {} rejected route candidate '{}' has no rejection reason",
+                event.event_id,
+                candidate.candidate_id
+            );
+        }
+        validate_route_texts(
+            event,
+            "details.routing.candidates.rejectionReasons",
+            &candidate.rejection_reasons,
+        )?;
+        validate_route_texts(
+            event,
+            "details.routing.candidates.reasons",
+            &candidate.reasons,
+        )?;
+        let mut component_names = BTreeSet::new();
+        let mut weight_total = 0_u32;
+        let mut weighted_total = 0_u32;
+        for component in &candidate.components {
+            validate_label(
+                "details.routing.candidates.components.name",
+                &component.name,
+            )?;
+            if !component_names.insert(component.name.as_str()) {
+                bail!(
+                    "event {} route candidate '{}' repeats score component '{}'",
+                    event.event_id,
+                    candidate.candidate_id,
+                    component.name
+                );
+            }
+            if component.score_basis_points > 10_000
+                || component.weight_basis_points > 10_000
+                || component.weighted_points > 10_000
+            {
+                bail!(
+                    "event {} route candidate '{}' has an invalid score component",
+                    event.event_id,
+                    candidate.candidate_id
+                );
+            }
+            validate_route_texts(
+                event,
+                "details.routing.candidates.components.reason",
+                std::slice::from_ref(&component.reason),
+            )?;
+            weight_total = weight_total.saturating_add(u32::from(component.weight_basis_points));
+            weighted_total = weighted_total.saturating_add(u32::from(component.weighted_points));
+        }
+        if candidate.eligible
+            && (candidate.components.is_empty()
+                || weight_total != 10_000
+                || candidate.total_score_basis_points != u16::try_from(weighted_total).ok())
+        {
+            bail!(
+                "event {} route candidate '{}' score components do not reproduce its total",
+                event.event_id,
+                candidate.candidate_id
+            );
+        }
+    }
+    if let Some(selected_id) = &routing.selected_candidate_id {
+        let selected = routing
+            .candidates
+            .iter()
+            .find(|candidate| candidate.candidate_id == *selected_id)
+            .with_context(|| {
+                format!(
+                    "event {} selected route candidate '{}' is missing from snapshot",
+                    event.event_id, selected_id
+                )
+            })?;
+        if !selected.eligible
+            || selected.total_score_basis_points != routing.selected_score_basis_points
+            || Some(selected.estimated_cost_microusd) != routing.estimated_cost_microusd
+            || selected.identity != event.identity
+        {
+            bail!(
+                "event {} selected route candidate snapshot disagrees with decision",
+                event.event_id
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
     use ObservabilityEventType as Type;
     if matches!(
@@ -1353,6 +1846,22 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
     ) {
         required("homeId", event.identity.home_id.as_deref())?;
         required("model", event.identity.model.as_deref())?;
+    }
+    if event.event_type == Type::RouteDecided {
+        required("taskId", event.trace.task_id.as_deref())?;
+        required("runId", event.trace.run_id.as_deref())?;
+        if event.details.routing.is_none() {
+            bail!("event {} requires routing details", event.event_id);
+        }
+        if event.status == ObservabilityStatus::Succeeded {
+            required("homeId", event.identity.home_id.as_deref())?;
+            required("model", event.identity.model.as_deref())?;
+        } else if event.status != ObservabilityStatus::Failed {
+            bail!(
+                "event {} route decision must use succeeded or failed status",
+                event.event_id
+            );
+        }
     }
     if event.event_type == Type::ToolCallCompleted {
         required("toolName", event.tool_name.as_deref())?;
@@ -1372,11 +1881,12 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
             bail!("event {} requires a health snapshot", event.event_id);
         }
     }
-    if matches!(
+    let requires_failure = matches!(
         event.event_type,
         Type::AttemptFailed | Type::RunFailed | Type::RateLimited | Type::AuthInvalid
-    ) && event.failure.is_none()
-    {
+    ) || (event.event_type == Type::RouteDecided
+        && event.status == ObservabilityStatus::Failed);
+    if requires_failure && event.failure.is_none() {
         bail!("event {} requires failure details", event.event_id);
     }
     if matches!(
@@ -1496,6 +2006,23 @@ fn validate_label(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_route_texts(event: &ObservabilityEvent, name: &str, values: &[String]) -> Result<()> {
+    if values.len() > 64 {
+        bail!("event {} {name} has too many entries", event.event_id);
+    }
+    for value in values {
+        let value = value.trim();
+        if value.is_empty()
+            || value.len() > 2048
+            || contains_obvious_secret(value)
+            || contains_obvious_local_path(value)
+        {
+            bail!("event {} has invalid {name} text", event.event_id);
+        }
+    }
+    Ok(())
+}
+
 fn contains_obvious_secret(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.contains("authorization: bearer")
@@ -1534,6 +2061,22 @@ fn event_text_values(event: &ObservabilityEvent) -> impl Iterator<Item = &str> {
             .as_ref()
             .and_then(|task| task.kind.as_deref()),
         event.details.route_reason.as_deref(),
+        event.details.route_decision_id.as_deref(),
+        event
+            .details
+            .routing
+            .as_ref()
+            .map(|routing| routing.request_id.as_str()),
+        event
+            .details
+            .routing
+            .as_ref()
+            .map(|routing| routing.policy_id.as_str()),
+        event
+            .details
+            .routing
+            .as_ref()
+            .and_then(|routing| routing.selected_candidate_id.as_deref()),
         event
             .details
             .transition
@@ -1872,6 +2415,8 @@ mod tests {
         assert!(csv.starts_with("schema_version,event_id,timestamp_ms"));
         assert!(csv.contains("attempt_completed"));
         assert!(csv.contains("gpt-test,100,40,60"));
-        assert!(csv.contains("route_reason,transition_kind,from_attempt_id"));
+        assert!(csv.contains(
+            "route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties"
+        ));
     }
 }

@@ -1,11 +1,13 @@
 use crate::{
     AttemptTransition, AttemptTransitionKind, EventDetails, EventSafety, ExecutionIdentity,
     FailureInfo, ObservabilityEvent, ObservabilityEventType, ObservabilityStatus,
-    ObservabilityStore, RunBudget, SafetySummary, TaskDescriptor, TraceContext, UsageDelta,
-    OBSERVABILITY_EVENT_SCHEMA_VERSION,
+    ObservabilityStore, RouteCandidateDecisionSnapshot, RouteDecision, RouteDecisionDetails,
+    RouteEngine, RouteHomeState, RoutePolicy, RouteRequest, RouteScoreSnapshot, RunBudget,
+    SafetySummary, TaskDescriptor, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +36,11 @@ pub enum AgentRunAction {
         identity: ExecutionIdentity,
         transition: AttemptTransition,
         route_reason: Option<String>,
+        route_decision_id: Option<String>,
+    },
+    RecordRouteDecision {
+        run_id: String,
+        decision: Box<RouteDecision>,
     },
     CompleteAttempt {
         run_id: String,
@@ -101,6 +108,7 @@ impl AgentRunAction {
                 AttemptTransitionKind::Retry => "retry_attempt",
                 AttemptTransitionKind::Migration => "migrate_attempt",
             },
+            Self::RecordRouteDecision { .. } => "record_route_decision",
             Self::CompleteAttempt { .. } => "complete_attempt",
             Self::FailAttempt { .. } => "fail_attempt",
             Self::LinkThread { .. } => "link_thread",
@@ -149,6 +157,10 @@ impl AgentRunAction {
                     Some(run_id.clone()),
                     Some(attempt_id.clone()),
                 ))
+            }
+            Self::RecordRouteDecision { run_id, .. } => {
+                let run = report.run(run_id)?;
+                Ok((run.task_id.clone(), Some(run_id.clone()), None))
             }
             Self::LinkThread {
                 run_id, attempt_id, ..
@@ -219,9 +231,36 @@ pub struct AgentAttemptView {
     pub identity: ExecutionIdentity,
     pub transition: AttemptTransition,
     pub route_reason: Option<String>,
+    pub route_decision_id: Option<String>,
     pub thread_ids: Vec<String>,
     pub usage: UsageDelta,
     pub failure: Option<FailureInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRouteDecisionView {
+    pub event_id: String,
+    pub request_id: String,
+    pub policy_id: String,
+    pub policy_revision: u64,
+    pub evaluated_at_timestamp_ms: u64,
+    pub observed_event_count: u64,
+    pub request: RouteRequest,
+    pub decided_at_ms: u64,
+    pub succeeded: bool,
+    pub identity: ExecutionIdentity,
+    pub selected_candidate_id: Option<String>,
+    pub selected_score_basis_points: Option<u16>,
+    pub estimated_cost_microusd: Option<u64>,
+    pub evaluated_candidates: u32,
+    pub eligible_candidates: u32,
+    pub home_locked: bool,
+    pub model_locked: bool,
+    pub sensitive_directory: bool,
+    pub reasons: Vec<String>,
+    pub rejection_summary: Vec<String>,
+    pub candidates: Vec<RouteCandidateDecisionSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -290,6 +329,7 @@ pub struct AgentRunView {
     pub budget: Option<RunBudget>,
     pub budget_state: RunBudgetState,
     pub consumption: RunConsumption,
+    pub route_decisions: Vec<AgentRouteDecisionView>,
     pub attempts: Vec<AgentAttemptView>,
     pub thread_ids: Vec<String>,
     pub tool_calls: u64,
@@ -370,7 +410,6 @@ impl AgentRunStore {
     }
 
     pub fn apply(&self, action: AgentRunAction) -> Result<AgentRunMutationReport> {
-        let timestamp_ms = now_ms()?;
         let event_id = generate_id("evt");
         let event_id_for_build = event_id.clone();
         let action_for_build = action.clone();
@@ -380,11 +419,58 @@ impl AgentRunStore {
                 &report,
                 &action_for_build,
                 event_id_for_build,
-                timestamp_ms,
+                now_ms()?,
                 events,
             )?;
             Ok(vec![event])
         })?;
+        self.mutation_report(action, event_id)
+    }
+
+    pub fn decide_route(
+        &self,
+        run_id: &str,
+        policy: &RoutePolicy,
+        request: &RouteRequest,
+        homes: &[RouteHomeState],
+    ) -> Result<(RouteDecision, AgentRunMutationReport)> {
+        let engine = RouteEngine::new(policy)?;
+        let event_id = generate_id("evt");
+        let event_id_for_build = event_id.clone();
+        let run_id_for_build = run_id.to_owned();
+        let decision_slot = RefCell::new(None);
+        self.events.append_checked(|events| {
+            let report = project_agent_runs(events, Path::new(""))?;
+            require_active_run(&report, &run_id_for_build)?;
+            let timestamp_ms = now_ms()?;
+            let decision = engine.evaluate(request, events, homes, timestamp_ms)?;
+            let action = AgentRunAction::RecordRouteDecision {
+                run_id: run_id_for_build.clone(),
+                decision: Box::new(decision.clone()),
+            };
+            let event =
+                build_action_event(&report, &action, event_id_for_build, timestamp_ms, events)?;
+            decision_slot.replace(Some(decision));
+            Ok(vec![event])
+        })?;
+        let decision = decision_slot
+            .into_inner()
+            .context("route decision was not produced")?;
+        let mutation = self.mutation_report(
+            AgentRunAction::RecordRouteDecision {
+                run_id: run_id.to_owned(),
+                decision: Box::new(decision.clone()),
+            },
+            event_id,
+        )?;
+        Ok((decision, mutation))
+    }
+
+    fn mutation_report(
+        &self,
+        action: AgentRunAction,
+        event_id: String,
+    ) -> Result<AgentRunMutationReport> {
         let report = self.report()?;
         let (task_id, run_id, attempt_id) = action.task_run_attempt(&report)?;
         let task = report.task(&task_id)?.clone();
@@ -484,6 +570,7 @@ fn build_action_event(
             identity,
             transition,
             route_reason,
+            route_decision_id,
         } => {
             let run = require_active_run(report, run_id)?;
             ensure_budget_allows_attempt(run)?;
@@ -534,9 +621,103 @@ fn build_action_event(
             event.identity = identity.clone();
             event.details.transition = Some(transition.clone());
             event.details.route_reason = route_reason.clone();
+            event.details.route_decision_id = route_decision_id.clone();
             if let Some(source) = &transition.from_attempt_id {
                 event.parent_event_id = terminal_event_id(events, source);
             }
+            Ok(event)
+        }
+        AgentRunAction::RecordRouteDecision { run_id, decision } => {
+            let run = require_active_run(report, run_id)?;
+            let selected = decision.selected.as_ref();
+            let mut event = base_event(
+                event_id,
+                timestamp_ms,
+                ObservabilityEventType::RouteDecided,
+                if selected.is_some() {
+                    ObservabilityStatus::Succeeded
+                } else {
+                    ObservabilityStatus::Failed
+                },
+                &run.task_id,
+                Some(run_id),
+                None,
+            );
+            if let Some(selection) = selected {
+                event.identity = selection.identity.clone();
+            } else {
+                event.failure = Some(FailureInfo {
+                    code: "no_eligible_route".to_owned(),
+                    phase: Some("routing".to_owned()),
+                    reason: bounded_event_text(&decision.decision_reason, 2_048),
+                    retryable: true,
+                });
+            }
+            let rejection_summary = decision
+                .candidates
+                .iter()
+                .filter(|candidate| !candidate.rejection_reasons.is_empty())
+                .take(64)
+                .map(|candidate| {
+                    bounded_event_text(
+                        &format!(
+                            "{}: {}",
+                            candidate.candidate_id,
+                            candidate.rejection_reasons.join(" | ")
+                        ),
+                        2_048,
+                    )
+                })
+                .collect::<Vec<_>>();
+            event.details.routing = Some(RouteDecisionDetails {
+                request_id: decision.request_id.clone(),
+                policy_id: decision.policy_id.clone(),
+                policy_revision: decision.policy_revision,
+                evaluated_at_timestamp_ms: decision.evaluated_at_timestamp_ms,
+                observed_event_count: u64::try_from(decision.observed_event_count)
+                    .context("observed route event count exceeds u64")?,
+                request: decision.request.clone(),
+                selected_candidate_id: selected.map(|value| value.candidate_id.clone()),
+                selected_score_basis_points: selected.map(|value| value.total_score_basis_points),
+                estimated_cost_microusd: selected.map(|value| value.estimated_cost_microusd),
+                evaluated_candidates: u32::try_from(decision.evaluated_candidates)
+                    .context("evaluated route candidate count exceeds u32")?,
+                eligible_candidates: u32::try_from(decision.eligible_candidates)
+                    .context("eligible route candidate count exceeds u32")?,
+                home_locked: decision.locks.home.is_some(),
+                model_locked: decision.locks.model.is_some(),
+                sensitive_directory: decision.locks.sensitive_directory,
+                reasons: selected.map_or_else(Vec::new, |value| value.reasons.clone()),
+                rejection_summary,
+                candidates: decision
+                    .candidates
+                    .iter()
+                    .map(|candidate| RouteCandidateDecisionSnapshot {
+                        candidate_id: candidate.candidate_id.clone(),
+                        identity: candidate.identity.clone(),
+                        eligible: candidate.eligible,
+                        total_score_basis_points: candidate.total_score_basis_points,
+                        estimated_cost_microusd: candidate.estimated_cost_microusd,
+                        historical_attempts: candidate.historical_attempts,
+                        historical_success_basis_points: candidate.historical_success_basis_points,
+                        active_attempts: candidate.active_attempts,
+                        quota_remaining_basis_points: candidate.quota_remaining_basis_points,
+                        components: candidate
+                            .components
+                            .iter()
+                            .map(|component| RouteScoreSnapshot {
+                                name: component.name.clone(),
+                                score_basis_points: component.score_basis_points,
+                                weight_basis_points: component.weight_basis_points,
+                                weighted_points: component.weighted_points,
+                                reason: component.reason.clone(),
+                            })
+                            .collect(),
+                        reasons: candidate.reasons.clone(),
+                        rejection_reasons: candidate.rejection_reasons.clone(),
+                    })
+                    .collect(),
+            });
             Ok(event)
         }
         AgentRunAction::CompleteAttempt {
@@ -910,6 +1091,7 @@ fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<Agen
                         budget: event.details.budget.clone(),
                         budget_state: RunBudgetState::default(),
                         consumption: RunConsumption::default(),
+                        route_decisions: Vec::new(),
                         attempts: Vec::new(),
                         thread_ids: Vec::new(),
                         tool_calls: 0,
@@ -920,6 +1102,37 @@ fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<Agen
                         recovery: default_recovery(),
                     },
                 );
+            }
+            ObservabilityEventType::RouteDecided => {
+                let run = run_mut(&mut runs, run_id, event)?;
+                let routing = event
+                    .details
+                    .routing
+                    .as_ref()
+                    .context("route_decided is missing routing details")?;
+                run.route_decisions.push(AgentRouteDecisionView {
+                    event_id: event.event_id.clone(),
+                    request_id: routing.request_id.clone(),
+                    policy_id: routing.policy_id.clone(),
+                    policy_revision: routing.policy_revision,
+                    evaluated_at_timestamp_ms: routing.evaluated_at_timestamp_ms,
+                    observed_event_count: routing.observed_event_count,
+                    request: routing.request.clone(),
+                    decided_at_ms: event.timestamp_ms,
+                    succeeded: event.status == ObservabilityStatus::Succeeded,
+                    identity: event.identity.clone(),
+                    selected_candidate_id: routing.selected_candidate_id.clone(),
+                    selected_score_basis_points: routing.selected_score_basis_points,
+                    estimated_cost_microusd: routing.estimated_cost_microusd,
+                    evaluated_candidates: routing.evaluated_candidates,
+                    eligible_candidates: routing.eligible_candidates,
+                    home_locked: routing.home_locked,
+                    model_locked: routing.model_locked,
+                    sensitive_directory: routing.sensitive_directory,
+                    reasons: routing.reasons.clone(),
+                    rejection_summary: routing.rejection_summary.clone(),
+                    candidates: routing.candidates.clone(),
+                });
             }
             ObservabilityEventType::AttemptStarted => {
                 let run = run_mut(&mut runs, run_id, event)?;
@@ -944,6 +1157,7 @@ fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<Agen
                             from_attempt_id: None,
                         }),
                     route_reason: event.details.route_reason.clone(),
+                    route_decision_id: event.details.route_decision_id.clone(),
                     thread_ids: Vec::new(),
                     usage: UsageDelta::default(),
                     failure: None,
@@ -1416,6 +1630,17 @@ fn checked(left: u64, right: u64, label: &str) -> Result<u64> {
         .with_context(|| format!("{label} overflow"))
 }
 
+fn bounded_event_text(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].trim_end().to_owned()
+}
+
 fn agent_run_safety(includes_local_paths: bool) -> SafetySummary {
     SafetySummary {
         secrets_redacted: true,
@@ -1438,6 +1663,104 @@ mod tests {
             provider: Some("openai".to_owned()),
             model: Some(model.to_owned()),
             agent_role: Some("executor".to_owned()),
+        }
+    }
+
+    fn route_decision(home: &str, model: &str) -> RouteDecision {
+        let selected_identity = identity(home, model);
+        let component = crate::RouteScoreComponent {
+            name: "task_fit".to_owned(),
+            score_basis_points: 8_500,
+            weight_basis_points: 10_000,
+            weighted_points: 8_500,
+            reason: "matched coding specialty".to_owned(),
+        };
+        RouteDecision {
+            ok: true,
+            schema_version: crate::ROUTE_DECISION_SCHEMA_VERSION,
+            request_id: "request-1".to_owned(),
+            task_kind: crate::RouteTaskKind::SimpleCode,
+            policy_id: "policy-1".to_owned(),
+            policy_revision: 1,
+            evaluated_at_timestamp_ms: 0,
+            observed_event_count: 2,
+            request: RouteRequest {
+                schema_version: crate::ROUTE_REQUEST_SCHEMA_VERSION.to_owned(),
+                request_id: "request-1".to_owned(),
+                task_kind: crate::RouteTaskKind::SimpleCode,
+                estimated_context_tokens: 2_000,
+                estimated_output_tokens: 500,
+                required_capabilities: vec!["coding".to_owned()],
+                preferred_specialties: vec!["simple_code".to_owned()],
+                sensitive_directory: false,
+                required_security_domain: None,
+                locked_home: Some(home.to_owned()),
+                locked_model: None,
+                max_estimated_cost_microusd: None,
+                allow_degraded: false,
+            },
+            selected: Some(crate::RouteSelection {
+                candidate_id: "candidate-1".to_owned(),
+                identity: selected_identity.clone(),
+                total_score_basis_points: 8_500,
+                estimated_cost_microusd: 25,
+                reasons: vec!["matched coding specialty".to_owned()],
+            }),
+            evaluated_candidates: 1,
+            eligible_candidates: 1,
+            candidates: vec![crate::RouteCandidateEvaluation {
+                candidate_id: "candidate-1".to_owned(),
+                identity: selected_identity,
+                eligible: true,
+                total_score_basis_points: Some(8_500),
+                estimated_cost_microusd: 25,
+                historical_attempts: 0,
+                historical_success_basis_points: 5_000,
+                active_attempts: 0,
+                quota_remaining_basis_points: None,
+                components: vec![component],
+                reasons: vec!["matched coding specialty".to_owned()],
+                rejection_reasons: Vec::new(),
+            }],
+            decision_reason: "selected candidate-1".to_owned(),
+            locks: crate::RouteLocks {
+                home: Some(home.to_owned()),
+                model: None,
+                sensitive_directory: false,
+            },
+            safety: agent_run_safety(false),
+        }
+    }
+
+    fn route_policy() -> RoutePolicy {
+        RoutePolicy {
+            schema_version: crate::ROUTE_POLICY_SCHEMA_VERSION.to_owned(),
+            policy_id: "policy-atomic".to_owned(),
+            revision: 3,
+            weights: crate::RouteScoreWeights::default(),
+            task_rules: Vec::new(),
+            candidates: vec![crate::RouteCandidateProfile {
+                candidate_id: "candidate-spark".to_owned(),
+                enabled: true,
+                home_id: "home-spark".to_owned(),
+                home_alias: Some("spark".to_owned()),
+                account_id: Some("account-spark".to_owned()),
+                provider: Some("openai".to_owned()),
+                model: "spark-model".to_owned(),
+                specialties: vec!["simple_code".to_owned()],
+                capabilities: vec!["coding".to_owned()],
+                security_domains: Vec::new(),
+                max_context_tokens: 32_000,
+                model_strength_basis_points: 7_000,
+                input_cost_microusd_per_million_tokens: 100,
+                output_cost_microusd_per_million_tokens: 200,
+                max_concurrent_runs: 1,
+                baseline_duration_ms: Some(1_000),
+            }],
+            history_prior_success_basis_points: 5_000,
+            history_prior_attempts: 2,
+            unknown_quota_basis_points: 5_000,
+            unknown_health_basis_points: 5_000,
         }
     }
 
@@ -1474,6 +1797,7 @@ mod tests {
                     from_attempt_id: None,
                 },
                 route_reason: Some("primary coding Home".to_owned()),
+                route_decision_id: None,
             })
             .expect("start attempt");
         (task_id, run_id, attempt_id)
@@ -1581,6 +1905,7 @@ mod tests {
                     from_attempt_id: Some(attempt_id),
                 },
                 route_reason: Some("move away from limited account".to_owned()),
+                route_decision_id: None,
             })
             .expect("migrate");
         store
@@ -1620,8 +1945,139 @@ mod tests {
                     from_attempt_id: Some("attempt-2".to_owned()),
                 },
                 route_reason: Some("retry after fixing test environment".to_owned()),
+                route_decision_id: None,
             })
             .expect_err("budget blocks retry");
         assert!(error.to_string().contains("budget is exhausted"));
+    }
+
+    #[test]
+    fn route_decision_is_projected_and_attempt_identity_must_match() {
+        let temp = TempDir::new().expect("temp");
+        let store = AgentRunStore::new(temp.path().join("events.jsonl"));
+        store
+            .apply(AgentRunAction::CreateTask {
+                task_id: "task-route".to_owned(),
+                label: "Route a small fix".to_owned(),
+                kind: Some("simple_code".to_owned()),
+            })
+            .expect("task");
+        store
+            .apply(AgentRunAction::StartRun {
+                task_id: "task-route".to_owned(),
+                run_id: "run-route".to_owned(),
+                budget: None,
+            })
+            .expect("run");
+        let route = store
+            .apply(AgentRunAction::RecordRouteDecision {
+                run_id: "run-route".to_owned(),
+                decision: Box::new(route_decision("home-spark", "spark-model")),
+            })
+            .expect("route");
+
+        let mismatch = store
+            .apply(AgentRunAction::StartAttempt {
+                run_id: "run-route".to_owned(),
+                attempt_id: "attempt-wrong".to_owned(),
+                identity: identity("home-primary", "strong-model"),
+                transition: AttemptTransition {
+                    kind: AttemptTransitionKind::Initial,
+                    from_attempt_id: None,
+                },
+                route_reason: Some("ignore the decision".to_owned()),
+                route_decision_id: Some(route.event_id.clone()),
+            })
+            .expect_err("mismatched route identity");
+        assert!(mismatch
+            .to_string()
+            .contains("does not match routeDecisionId"));
+
+        store
+            .apply(AgentRunAction::StartAttempt {
+                run_id: "run-route".to_owned(),
+                attempt_id: "attempt-spark".to_owned(),
+                identity: identity("home-spark", "spark-model"),
+                transition: AttemptTransition {
+                    kind: AttemptTransitionKind::Initial,
+                    from_attempt_id: None,
+                },
+                route_reason: Some("follow recorded decision".to_owned()),
+                route_decision_id: Some(route.event_id.clone()),
+            })
+            .expect("matching attempt");
+        let report = store.report().expect("report");
+        let run = report.run("run-route").expect("run");
+        assert_eq!(run.route_decisions.len(), 1);
+        assert_eq!(run.route_decisions[0].event_id, route.event_id);
+        assert_eq!(
+            run.attempts[0].route_decision_id.as_deref(),
+            Some(run.route_decisions[0].event_id.as_str())
+        );
+    }
+
+    #[test]
+    fn decide_route_evaluates_and_records_under_one_store_snapshot() {
+        let temp = TempDir::new().expect("temp");
+        let store = AgentRunStore::new(temp.path().join("events.jsonl"));
+        store
+            .apply(AgentRunAction::CreateTask {
+                task_id: "task-atomic-route".to_owned(),
+                label: "Route atomically".to_owned(),
+                kind: Some("simple_code".to_owned()),
+            })
+            .expect("task");
+        store
+            .apply(AgentRunAction::StartRun {
+                task_id: "task-atomic-route".to_owned(),
+                run_id: "run-atomic-route".to_owned(),
+                budget: None,
+            })
+            .expect("run");
+        let request = RouteRequest {
+            schema_version: crate::ROUTE_REQUEST_SCHEMA_VERSION.to_owned(),
+            request_id: "request-atomic".to_owned(),
+            task_kind: crate::RouteTaskKind::SimpleCode,
+            estimated_context_tokens: 2_000,
+            estimated_output_tokens: 500,
+            required_capabilities: vec!["coding".to_owned()],
+            preferred_specialties: vec!["simple_code".to_owned()],
+            sensitive_directory: false,
+            required_security_domain: None,
+            locked_home: None,
+            locked_model: None,
+            max_estimated_cost_microusd: None,
+            allow_degraded: false,
+        };
+        let homes = vec![RouteHomeState {
+            home_id: "home-spark".to_owned(),
+            home_alias: Some("spark".to_owned()),
+            available: true,
+        }];
+
+        let (decision, mutation) = store
+            .decide_route("run-atomic-route", &route_policy(), &request, &homes)
+            .expect("atomic route decision");
+
+        assert!(decision.ok);
+        assert_eq!(decision.observed_event_count, 2);
+        assert_eq!(
+            mutation.event_id,
+            mutation.run.as_ref().unwrap().route_decisions[0].event_id
+        );
+        let recorded = &mutation.run.as_ref().unwrap().route_decisions[0];
+        assert_eq!(recorded.observed_event_count, 2);
+        assert_eq!(
+            recorded.evaluated_at_timestamp_ms,
+            decision.evaluated_at_timestamp_ms
+        );
+        assert_eq!(recorded.decided_at_ms, decision.evaluated_at_timestamp_ms);
+        assert_eq!(recorded.request, request);
+        assert_eq!(recorded.candidates[0].active_attempts, 0);
+        assert!(!recorded.candidates[0].components[0].reason.is_empty());
+        let summary = ObservabilityStore::new(store.path().to_path_buf())
+            .summary(&crate::ObservabilityFilter::default())
+            .expect("observability summary");
+        assert_eq!(summary.totals.route_decisions, 1);
     }
 }

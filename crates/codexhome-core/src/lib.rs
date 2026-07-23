@@ -10,12 +10,14 @@ mod agent_runs;
 mod home;
 mod observability;
 mod registry;
+mod router;
 
 pub use agent_runs::{
-    generate_id, AgentArtifactView, AgentAttemptView, AgentRunAction, AgentRunMutationReport,
-    AgentRunReport, AgentRunStore, AgentRunView, AgentTaskView, AgentVerificationView,
-    AttemptLifecycleStatus, RunBudgetState, RunConsumption, RunLifecycleStatus, RunRecovery,
-    TaskLifecycleStatus, AGENT_RUN_MUTATION_SCHEMA_VERSION, AGENT_RUN_REPORT_SCHEMA_VERSION,
+    generate_id, AgentArtifactView, AgentAttemptView, AgentRouteDecisionView, AgentRunAction,
+    AgentRunMutationReport, AgentRunReport, AgentRunStore, AgentRunView, AgentTaskView,
+    AgentVerificationView, AttemptLifecycleStatus, RunBudgetState, RunConsumption,
+    RunLifecycleStatus, RunRecovery, TaskLifecycleStatus, AGENT_RUN_MUTATION_SCHEMA_VERSION,
+    AGENT_RUN_REPORT_SCHEMA_VERSION,
 };
 pub use home::{CopySummary, HomeManager, HomeMutationResult};
 pub use observability::{
@@ -23,7 +25,8 @@ pub use observability::{
     EventDetails, EventSafety, ExecutionIdentity, FailureInfo, HealthSnapshot, LatestHomeHealth,
     ObservabilityAppendReport, ObservabilityEvent, ObservabilityEventType, ObservabilityExport,
     ObservabilityFilter, ObservabilityGroup, ObservabilityStatus, ObservabilityStore,
-    ObservabilitySummary, ObservabilityTotals, ObservabilityVerifyReport, RunBudget,
+    ObservabilitySummary, ObservabilityTotals, ObservabilityVerifyReport,
+    RouteCandidateDecisionSnapshot, RouteDecisionDetails, RouteScoreSnapshot, RunBudget,
     TaskDescriptor, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
     OBSERVABILITY_EXPORT_SCHEMA_VERSION, OBSERVABILITY_SUMMARY_SCHEMA_VERSION,
     OBSERVABILITY_VERIFY_SCHEMA_VERSION,
@@ -31,6 +34,13 @@ pub use observability::{
 pub use registry::{
     normalize_alias, normalize_specialties, RegisteredHomeView, Registry, RegistryEntry,
     RegistryOrigin, RegistryReport, RegistryStore,
+};
+pub use router::{
+    parse_route_policy, parse_route_request, RouteCandidateEvaluation, RouteCandidateProfile,
+    RouteDecision, RouteEngine, RouteHomeState, RouteLocks, RoutePolicy, RoutePolicyStore,
+    RouteRequest, RouteScoreComponent, RouteScoreWeights, RouteSelection, RouteTaskKind,
+    RouteTaskRule, ROUTE_DECISION_SCHEMA_VERSION, ROUTE_POLICY_SCHEMA_VERSION,
+    ROUTE_REQUEST_SCHEMA_VERSION,
 };
 
 pub const DISCOVERY_SCHEMA_VERSION: &str = "codexhome.discovery.v1";

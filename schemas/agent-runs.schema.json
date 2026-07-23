@@ -57,6 +57,7 @@
         "budget",
         "budgetState",
         "consumption",
+        "routeDecisions",
         "attempts",
         "threadIds",
         "toolCalls",
@@ -82,6 +83,10 @@
         },
         "budgetState": { "$ref": "#/$defs/budgetState" },
         "consumption": { "$ref": "#/$defs/consumption" },
+        "routeDecisions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/routeDecision" }
+        },
         "attempts": {
           "type": "array",
           "items": { "$ref": "#/$defs/attempt" }
@@ -125,6 +130,7 @@
         "identity",
         "transition",
         "routeReason",
+        "routeDecisionId",
         "threadIds",
         "usage",
         "failure"
@@ -142,6 +148,9 @@
           "$ref": "observability-event.schema.json#/$defs/attemptTransition"
         },
         "routeReason": { "type": ["string", "null"], "maxLength": 2048 },
+        "routeDecisionId": {
+          "$ref": "observability-event.schema.json#/$defs/nullableIdentifier"
+        },
         "threadIds": {
           "type": "array",
           "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
@@ -152,6 +161,73 @@
             { "$ref": "observability-event.schema.json#/$defs/failure" },
             { "type": "null" }
           ]
+        }
+      }
+    },
+    "routeDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId",
+        "requestId",
+        "policyId",
+        "policyRevision",
+        "evaluatedAtTimestampMs",
+        "observedEventCount",
+        "request",
+        "decidedAtMs",
+        "succeeded",
+        "identity",
+        "selectedCandidateId",
+        "selectedScoreBasisPoints",
+        "estimatedCostMicrousd",
+        "evaluatedCandidates",
+        "eligibleCandidates",
+        "homeLocked",
+        "modelLocked",
+        "sensitiveDirectory",
+        "reasons",
+        "rejectionSummary",
+        "candidates"
+      ],
+      "properties": {
+        "eventId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "requestId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "policyId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "policyRevision": { "type": "integer", "minimum": 0 },
+        "evaluatedAtTimestampMs": { "type": "integer", "minimum": 0 },
+        "observedEventCount": { "type": "integer", "minimum": 0 },
+        "request": { "$ref": "route-request.schema.json" },
+        "decidedAtMs": { "type": "integer", "minimum": 0 },
+        "succeeded": { "type": "boolean" },
+        "identity": { "$ref": "observability-event.schema.json#/$defs/identity" },
+        "selectedCandidateId": {
+          "$ref": "observability-event.schema.json#/$defs/nullableIdentifier"
+        },
+        "selectedScoreBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "estimatedCostMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+        "evaluatedCandidates": { "type": "integer", "minimum": 0 },
+        "eligibleCandidates": { "type": "integer", "minimum": 0 },
+        "homeLocked": { "type": "boolean" },
+        "modelLocked": { "type": "boolean" },
+        "sensitiveDirectory": { "type": "boolean" },
+        "reasons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "rejectionSummary": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "$ref": "observability-event.schema.json#/$defs/routeCandidateSnapshot"
+          }
         }
       }
     },

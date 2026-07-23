@@ -8,7 +8,7 @@
 
 CodexHome Manager helps Codex power users discover, separate, label, clone, and manage multiple `CODEX_HOME` directories as isolated Skill Spaces and specialized Agent Households.
 
-> Status: v0.2 alpha. Discovery, registry aliases, safe Home lifecycle commands, append-only observability, durable Agent Run projections, and the connected Desktop UI work. Process execution, policy routing, Skill placement, and MCP routing remain roadmap work.
+> Status: v0.2 alpha. Discovery, registry aliases, safe Home lifecycle commands, append-only observability, durable Agent Run projections, an explainable policy-router CLI, and the connected Desktop UI work. Process execution, automatic scheduling, Skill placement, and MCP routing remain roadmap work.
 
 ## Why
 
@@ -44,6 +44,10 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Enforce token, duration, cost, and attempt budgets before starting another attempt.
 - Attribute failed-attempt cost separately from successful work.
 - Link threads, tool calls, opaque artifacts, verification evidence, and final artifacts.
+- Rank Home/account/model candidates with hard constraints and nine itemized score components.
+- Use live quota, health, rate-limit, historical success, duration, cost, and active-load evidence.
+- Lock a Home or model and record immutable candidate snapshots in the Agent Run event chain.
+- Evaluate and append Run route decisions under one lock with reproducible event-count provenance.
 
 ## Five-minute quickstart
 
@@ -93,6 +97,9 @@ codexhome task create --label "Compile benchmark" --kind coding
 codexhome run start <task-id> --max-total-tokens 300000 --max-duration-ms 5400000
 codexhome run attempt start <run-id> --home-id home-main --model gpt-5.5
 codexhome run show <run-id> --json
+codexhome route validate --route-policy router-policy.json --json
+codexhome route recommend route-request.json --route-policy router-policy.json --json
+codexhome route decide route-request.json --run-id <run-id> --route-policy router-policy.json --json
 ```
 
 Clone Skills, Rules, and Hooks only after reviewing the source Home:
@@ -130,7 +137,7 @@ Registry path precedence is `--registry`, then `CODEXHOME_REGISTRY`, then `~/.co
 
 `--json` writes only JSON to stdout. Progress and diagnostics must never corrupt the JSON stream. Reports exclude credential values but include local Home paths and provider hostnames, so review them before sharing publicly.
 
-The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, and `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`.
+The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`, and `codexhome.route-request.v1` / `codexhome.route-policy.v1` / `codexhome.route-decision.v1`.
 
 The Agent Run state is projected from the same append-only observability stream, so cost analysis and lifecycle state cannot silently drift. The stream excludes prompts, responses, credential values, arbitrary payloads, raw tool arguments, and artifact paths. See [docs/observability.md](docs/observability.md) and [docs/agent-runs.md](docs/agent-runs.md).
 
@@ -167,6 +174,7 @@ For frontend-only development, use `npm run dev`. See [docs/troubleshooting.md](
 - [Desktop adapter contract](docs/desktop-api.md)
 - [Observability event and metric contract](docs/observability.md)
 - [Agent Run lifecycle and recovery contract](docs/agent-runs.md)
+- [Explainable policy router](docs/policy-router.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Product readiness audit](docs/product-readiness-v0.2.md)
 - [Security and privacy audit](docs/security-audit-v0.2.md)

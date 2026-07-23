@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/route-request.schema.json",
+  "title": "CodexHome Route Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "requestId",
+    "taskKind",
+    "estimatedContextTokens",
+    "estimatedOutputTokens"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.route-request.v1" },
+    "requestId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "taskKind": { "$ref": "#/$defs/taskKind" },
+    "estimatedContextTokens": { "type": "integer", "minimum": 1 },
+    "estimatedOutputTokens": { "type": "integer", "minimum": 0 },
+    "requiredCapabilities": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+    },
+    "preferredSpecialties": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+    },
+    "sensitiveDirectory": { "type": "boolean", "default": false },
+    "requiredSecurityDomain": {
+      "$ref": "observability-event.schema.json#/$defs/nullableLabel"
+    },
+    "lockedHome": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+    "lockedModel": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+    "maxEstimatedCostMicrousd": { "type": ["integer", "null"], "minimum": 1 },
+    "allowDegraded": { "type": "boolean", "default": false }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["sensitiveDirectory"],
+        "properties": { "sensitiveDirectory": { "const": true } }
+      },
+      "then": {
+        "required": ["lockedHome"],
+        "properties": { "lockedHome": { "type": "string", "minLength": 1 } }
+      }
+    }
+  ],
+  "$defs": {
+    "taskKind": {
+      "enum": [
+        "simple_code",
+        "architecture",
+        "long_document",
+        "batch",
+        "retrieval",
+        "visual",
+        "general"
+      ]
+    }
+  }
+}

@@ -26,6 +26,7 @@
         "start_attempt",
         "retry_attempt",
         "migrate_attempt",
+        "record_route_decision",
         "complete_attempt",
         "fail_attempt",
         "link_thread",

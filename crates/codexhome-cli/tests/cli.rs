@@ -39,6 +39,7 @@ fn root_help_is_useful() {
     assert!(stdout.contains("observe"));
     assert!(stdout.contains("task"));
     assert!(stdout.contains("run"));
+    assert!(stdout.contains("route"));
     assert!(stdout.contains("--json"));
     assert!(stdout.contains("Examples:"));
 }
@@ -574,4 +575,225 @@ fn agent_run_cli_tracks_migration_failure_cost_and_final_artifact() {
     assert_eq!(report["run"]["verifications"][0]["succeeded"], true);
     assert_eq!(report["run"]["threadIds"][0], "thread-cli");
     assert_eq!(report["task"]["status"], "succeeded");
+}
+
+#[test]
+fn route_cli_records_explainable_decision_and_binds_attempt_identity() {
+    let temp = TempDir::new().expect("temp dir");
+    let registry = temp.path().join("state/registry.json");
+    let store = temp.path().join("state/events.jsonl");
+    let policy_path = temp.path().join("router-policy.json");
+    let request_path = temp.path().join("route-request.json");
+
+    let create_home = |alias: &str, path: &Path, specialty: &str| {
+        let output = binary()
+            .args(["home", "create", alias, "--path"])
+            .arg(path)
+            .args(["--specialty", specialty, "--registry"])
+            .arg(&registry)
+            .arg("--json")
+            .env("HOME", temp.path())
+            .output()
+            .expect("create route Home");
+        assert!(
+            output.status.success(),
+            "stdout={}\nstderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("Home JSON")
+    };
+    let spark = create_home("@spark", &temp.path().join("spark-home"), "spark");
+    let primary = create_home(
+        "@primary",
+        &temp.path().join("primary-home"),
+        "architecture",
+    );
+    let policy = serde_json::json!({
+        "schemaVersion": "codexhome.route-policy.v1",
+        "policyId": "cli-policy",
+        "revision": 1,
+        "taskRules": [{
+            "taskKind": "simple_code",
+            "preferredSpecialties": ["spark"],
+            "requiredCapabilities": ["coding"],
+            "minimumModelStrengthBasisPoints": null,
+            "weights": null
+        }],
+        "candidates": [
+            {
+                "candidateId": "spark",
+                "homeId": spark["entry"]["id"],
+                "homeAlias": "@spark",
+                "accountId": "spark-account",
+                "provider": "test",
+                "model": "spark-model",
+                "specialties": ["spark", "coding"],
+                "capabilities": ["coding"],
+                "securityDomains": ["local"],
+                "maxContextTokens": 128000,
+                "modelStrengthBasisPoints": 6500,
+                "inputCostMicrousdPerMillionTokens": 100,
+                "outputCostMicrousdPerMillionTokens": 200,
+                "maxConcurrentRuns": 4,
+                "baselineDurationMs": 10000
+            },
+            {
+                "candidateId": "primary",
+                "homeId": primary["entry"]["id"],
+                "homeAlias": "@primary",
+                "accountId": "primary-account",
+                "provider": "test",
+                "model": "strong-model",
+                "specialties": ["architecture", "coding"],
+                "capabilities": ["coding"],
+                "securityDomains": ["local", "local-sensitive"],
+                "maxContextTokens": 512000,
+                "modelStrengthBasisPoints": 9500,
+                "inputCostMicrousdPerMillionTokens": 900,
+                "outputCostMicrousdPerMillionTokens": 1800,
+                "maxConcurrentRuns": 2,
+                "baselineDurationMs": 40000
+            }
+        ]
+    });
+    fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).expect("policy JSON"),
+    )
+    .expect("write policy");
+    fs::write(
+        &request_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schemaVersion": "codexhome.route-request.v1",
+            "requestId": "request-cli",
+            "taskKind": "simple_code",
+            "estimatedContextTokens": 12000,
+            "estimatedOutputTokens": 2000,
+            "requiredCapabilities": ["coding"],
+            "preferredSpecialties": ["spark"],
+            "sensitiveDirectory": false,
+            "requiredSecurityDomain": null,
+            "lockedHome": null,
+            "lockedModel": null,
+            "maxEstimatedCostMicrousd": null,
+            "allowDegraded": false
+        }))
+        .expect("request JSON"),
+    )
+    .expect("write request");
+
+    run_json(
+        &store,
+        &[
+            "task",
+            "create",
+            "--task-id",
+            "task-route",
+            "--label",
+            "Route CLI task",
+            "--kind",
+            "simple_code",
+        ],
+    );
+    run_json(
+        &store,
+        &["run", "start", "task-route", "--run-id", "run-route"],
+    );
+    let decision_output = binary()
+        .args(["route", "decide"])
+        .arg(&request_path)
+        .args(["--run-id", "run-route", "--route-policy"])
+        .arg(&policy_path)
+        .arg("--registry")
+        .arg(&registry)
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .env("HOME", temp.path())
+        .output()
+        .expect("route decide");
+    assert!(
+        decision_output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&decision_output.stdout),
+        String::from_utf8_lossy(&decision_output.stderr)
+    );
+    let decision: Value =
+        serde_json::from_slice(&decision_output.stdout).expect("route decision JSON");
+    assert_eq!(
+        decision["schemaVersion"],
+        "codexhome.route-decision-record.v1"
+    );
+    assert_eq!(decision["decision"]["selected"]["candidateId"], "spark");
+    assert_eq!(
+        decision["decision"]["candidates"][0]["components"]
+            .as_array()
+            .map(Vec::len),
+        Some(9)
+    );
+    assert_eq!(decision["decision"]["observedEventCount"], 2);
+    assert_eq!(
+        decision["decision"]["request"]["estimatedContextTokens"],
+        12_000
+    );
+    let route_event = decision["eventId"].as_str().expect("route event ID");
+
+    let attempt = binary()
+        .args([
+            "run",
+            "attempt",
+            "start",
+            "run-route",
+            "--attempt-id",
+            "attempt-route",
+            "--home-id",
+        ])
+        .arg(spark["entry"]["id"].as_str().expect("spark id"))
+        .args([
+            "--home-alias",
+            "@spark",
+            "--account",
+            "spark-account",
+            "--provider",
+            "test",
+            "--model",
+            "spark-model",
+            "--route-reason",
+            "follow explainable route decision",
+            "--route-decision-id",
+            route_event,
+            "--observability-store",
+        ])
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("start routed attempt");
+    assert!(
+        attempt.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&attempt.stdout),
+        String::from_utf8_lossy(&attempt.stderr)
+    );
+    let report = run_json(&store, &["run", "show", "run-route"]);
+    assert_eq!(report["run"]["routeDecisions"][0]["eventId"], route_event);
+    assert_eq!(report["run"]["routeDecisions"][0]["observedEventCount"], 2);
+    assert_eq!(
+        report["run"]["routeDecisions"][0]["evaluatedAtTimestampMs"],
+        report["run"]["routeDecisions"][0]["decidedAtMs"]
+    );
+    assert_eq!(
+        report["run"]["routeDecisions"][0]["request"]["taskKind"],
+        "simple_code"
+    );
+    assert_eq!(
+        report["run"]["routeDecisions"][0]["candidates"][0]["activeAttempts"],
+        0
+    );
+    assert!(
+        report["run"]["routeDecisions"][0]["candidates"][0]["components"][0]["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+    );
+    assert_eq!(report["run"]["attempts"][0]["routeDecisionId"], route_event);
 }

@@ -2,17 +2,19 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use codexhome_core::{
     discover, doctor, generate_id, observability_events_csv, parse_observability_events,
-    AgentRunAction, AgentRunMutationReport, AgentRunReport, AgentRunStore, AgentRunView,
-    AttemptTransition, AttemptTransitionKind, CodexHomeSummary, DiscoveryOptions, DiscoveryReport,
-    ExecutionIdentity, FailureInfo, HomeManager, HomeMutationResult, ObservabilityFilter,
-    ObservabilityStatus, ObservabilityStore, ObservabilitySummary, RegisteredHomeView,
-    RegistryReport, RegistryStore, RunBudget, UsageDelta,
+    parse_route_request, AgentRunAction, AgentRunMutationReport, AgentRunReport, AgentRunStore,
+    AgentRunView, AttemptTransition, AttemptTransitionKind, CodexHomeSummary, DiscoveryOptions,
+    DiscoveryReport, ExecutionIdentity, FailureInfo, HomeManager, HomeMutationResult,
+    ObservabilityFilter, ObservabilityStatus, ObservabilityStore, ObservabilitySummary,
+    RegisteredHomeView, RegistryReport, RegistryStore, RouteDecision, RouteEngine, RouteHomeState,
+    RoutePolicyStore, RunBudget, UsageDelta,
 };
 use serde_json::json;
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -20,7 +22,7 @@ use std::process::ExitCode;
     version,
     about = "Discover and manage specialized Codex Homes",
     long_about = "Discover, register, and manage multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output.",
-    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome task create --label 'Compile benchmark'\n  codexhome run start task-123 --max-total-tokens 300000\n  codexhome run attempt start run-123 --home-id home-main --model gpt-5.5\n  codexhome observe summary --home-id @research --json"
+    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome task create --label 'Compile benchmark'\n  codexhome run start task-123 --max-total-tokens 300000\n  codexhome route recommend request.json --json\n  codexhome route decide request.json --run-id run-123 --json\n  codexhome run attempt start run-123 --home-id home-main --model gpt-5.5\n  codexhome observe summary --home-id @research --json"
 )]
 struct Cli {
     /// Add a CODEX_HOME candidate without changing the active shell environment.
@@ -34,6 +36,10 @@ struct Cli {
     /// Override the append-only observability JSONL store.
     #[arg(long, global = true, value_name = "FILE")]
     observability_store: Option<PathBuf>,
+
+    /// Override the explainable routing policy file.
+    #[arg(long, global = true, value_name = "FILE")]
+    route_policy: Option<PathBuf>,
 
     /// Emit stable machine-readable JSON to stdout.
     #[arg(long, global = true)]
@@ -86,6 +92,34 @@ enum Command {
         #[command(subcommand)]
         command: RunCommand,
     },
+
+    /// Recommend and record explainable Home/account/model routes.
+    Route {
+        #[command(subcommand)]
+        command: RouteCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RouteCommand {
+    /// Evaluate every candidate and return an itemized recommendation.
+    Recommend {
+        /// Route request JSON file, or - for stdin.
+        #[arg(value_name = "FILE")]
+        request: String,
+    },
+    /// Evaluate candidates and append the decision to an existing Agent Run.
+    Decide {
+        /// Route request JSON file, or - for stdin.
+        #[arg(value_name = "FILE")]
+        request: String,
+        #[arg(long)]
+        run_id: String,
+    },
+    /// Validate the active policy and summarize its candidates and task rules.
+    Validate,
+    /// Print the active route policy path.
+    Path,
 }
 
 #[derive(Debug, Subcommand)]
@@ -176,6 +210,8 @@ enum AttemptCommand {
         identity: IdentityArgs,
         #[arg(long)]
         route_reason: Option<String>,
+        #[arg(long)]
+        route_decision_id: Option<String>,
     },
     /// Retry a retryable failed attempt in the same run.
     Retry {
@@ -187,6 +223,8 @@ enum AttemptCommand {
         identity: IdentityArgs,
         #[arg(long)]
         route_reason: String,
+        #[arg(long)]
+        route_decision_id: Option<String>,
     },
     /// Migrate a failed attempt to a different Home, account, or model.
     Migrate {
@@ -198,6 +236,8 @@ enum AttemptCommand {
         identity: IdentityArgs,
         #[arg(long)]
         route_reason: String,
+        #[arg(long)]
+        route_decision_id: Option<String>,
     },
     /// Mark an attempt successful and record its total usage.
     Complete {
@@ -654,6 +694,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         home,
         registry,
         observability_store,
+        route_policy,
         json,
         command,
     } = cli;
@@ -692,6 +733,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Observe { command } => run_observe(command, observability_store, json),
         Command::Task { command } => run_task(command, observability_store, json),
         Command::Run { command } => run_agent_run(command, observability_store, json),
+        Command::Route { command } => {
+            run_route(command, route_policy, registry, observability_store, json)
+        }
     }
 }
 
@@ -895,6 +939,7 @@ fn run_agent_run(
                     attempt_id,
                     identity,
                     route_reason,
+                    route_decision_id,
                 } => AgentRunAction::StartAttempt {
                     run_id,
                     attempt_id: attempt_id.unwrap_or_else(|| generate_id("attempt")),
@@ -904,6 +949,7 @@ fn run_agent_run(
                         from_attempt_id: None,
                     },
                     route_reason,
+                    route_decision_id,
                 },
                 AttemptCommand::Retry {
                     run_id,
@@ -911,6 +957,7 @@ fn run_agent_run(
                     attempt_id,
                     identity,
                     route_reason,
+                    route_decision_id,
                 } => AgentRunAction::StartAttempt {
                     run_id,
                     attempt_id: attempt_id.unwrap_or_else(|| generate_id("attempt")),
@@ -920,6 +967,7 @@ fn run_agent_run(
                         from_attempt_id: Some(from_attempt_id),
                     },
                     route_reason: Some(route_reason),
+                    route_decision_id,
                 },
                 AttemptCommand::Migrate {
                     run_id,
@@ -927,6 +975,7 @@ fn run_agent_run(
                     attempt_id,
                     identity,
                     route_reason,
+                    route_decision_id,
                 } => AgentRunAction::StartAttempt {
                     run_id,
                     attempt_id: attempt_id.unwrap_or_else(|| generate_id("attempt")),
@@ -936,6 +985,7 @@ fn run_agent_run(
                         from_attempt_id: Some(from_attempt_id),
                     },
                     route_reason: Some(route_reason),
+                    route_decision_id,
                 },
                 AttemptCommand::Complete {
                     run_id,
@@ -1095,6 +1145,129 @@ fn run_agent_run(
 fn apply_run_action(store: &AgentRunStore, action: AgentRunAction, json: bool) -> Result<()> {
     let report = store.apply(action)?;
     output_run_mutation(&report, json)
+}
+
+fn run_route(
+    command: RouteCommand,
+    policy_path: Option<PathBuf>,
+    registry_path: Option<PathBuf>,
+    observability_path: Option<PathBuf>,
+    json: bool,
+) -> Result<ExitCode> {
+    let policy_store = RoutePolicyStore::from_environment(policy_path)?;
+    match command {
+        RouteCommand::Path => {
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.route-policy-path.v1",
+                    "policyPath": policy_store.path().to_string_lossy(),
+                    "includesLocalPaths": true,
+                }))?;
+            } else {
+                println!("{}", policy_store.path().display());
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        RouteCommand::Validate => {
+            let policy = policy_store.load()?;
+            let report = json!({
+                "ok": true,
+                "schemaVersion": "codexhome.route-policy-report.v1",
+                "policyPath": policy_store.path().to_string_lossy(),
+                "policyId": policy.policy_id,
+                "revision": policy.revision,
+                "candidateCount": policy.candidates.len(),
+                "taskRuleCount": policy.task_rules.len(),
+                "weights": policy.weights,
+                "safety": {
+                    "secretsRedacted": true,
+                    "includesSecrets": false,
+                    "readsAuthContents": false,
+                    "includesLocalPaths": true,
+                }
+            });
+            if json {
+                print_json(&report)?;
+            } else {
+                println!(
+                    "Route policy '{}' revision {} is valid: {} candidate(s), {} task rule(s).",
+                    report["policyId"].as_str().unwrap_or("-"),
+                    report["revision"].as_u64().unwrap_or(0),
+                    report["candidateCount"].as_u64().unwrap_or(0),
+                    report["taskRuleCount"].as_u64().unwrap_or(0)
+                );
+                println!("{}", policy_store.path().display());
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        RouteCommand::Recommend { .. } | RouteCommand::Decide { .. } => {}
+    }
+
+    let policy = policy_store.load()?;
+    let registry = RegistryStore::from_environment(registry_path)?.report()?;
+    let homes = registry
+        .homes
+        .iter()
+        .map(|home| RouteHomeState {
+            home_id: home.entry.id.clone(),
+            home_alias: Some(home.entry.alias.clone()),
+            available: home.available,
+        })
+        .collect::<Vec<_>>();
+    let (request_file, run_id) = match &command {
+        RouteCommand::Recommend { request } => (request.as_str(), None),
+        RouteCommand::Decide { request, run_id } => (request.as_str(), Some(run_id.as_str())),
+        RouteCommand::Validate | RouteCommand::Path => unreachable!(),
+    };
+    let request = parse_route_request(&read_observability_input(request_file)?)?;
+
+    if let Some(run_id) = run_id {
+        let run_store = AgentRunStore::from_environment(observability_path)?;
+        let (decision, mutation) = run_store.decide_route(run_id, &policy, &request, &homes)?;
+        let report = json!({
+            "ok": decision.ok,
+            "schemaVersion": "codexhome.route-decision-record.v1",
+            "decision": decision,
+            "eventId": mutation.event_id,
+            "runId": mutation.run_id,
+            "run": mutation.run,
+            "safety": mutation.safety,
+        });
+        if json {
+            print_json(&report)?;
+        } else {
+            print_route_decision(&decision);
+            println!(
+                "Recorded route decision as event {} in run {}.",
+                mutation.event_id,
+                mutation.run_id.as_deref().unwrap_or("-")
+            );
+        }
+        Ok(if decision.ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        })
+    } else {
+        let engine = RouteEngine::new(&policy)?;
+        let events = ObservabilityStore::from_environment(observability_path)?.load_verified()?;
+        let decision = engine.evaluate(&request, &events, &homes, current_timestamp_ms()?)?;
+        output(json, &decision, || print_route_decision(&decision))?;
+        Ok(if decision.ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        })
+    }
+}
+
+fn current_timestamp_ms() -> Result<u64> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before UNIX epoch")?
+        .as_millis();
+    u64::try_from(millis).context("timestamp does not fit in u64")
 }
 
 fn output_run_mutation(report: &AgentRunMutationReport, json: bool) -> Result<()> {
@@ -1421,7 +1594,8 @@ fn print_agent_run(run: &AgentRunView) {
         run.recovery.reason
     );
     println!(
-        "  threads={} tools={} artifacts={} verifications={}",
+        "  routes={} threads={} tools={} artifacts={} verifications={}",
+        run.route_decisions.len(),
         run.thread_ids.len(),
         run.tool_calls,
         run.artifacts.len(),
@@ -1443,11 +1617,58 @@ fn print_agent_run(run: &AgentRunView) {
     }
 }
 
+fn print_route_decision(decision: &RouteDecision) {
+    println!(
+        "Route request {} · {:?} · policy={}@{}",
+        decision.request_id, decision.task_kind, decision.policy_id, decision.policy_revision
+    );
+    println!("{}", decision.decision_reason);
+    println!(
+        "Evaluated {} candidate(s); {} eligible; {} prior event(s) observed at {}.",
+        decision.evaluated_candidates,
+        decision.eligible_candidates,
+        decision.observed_event_count,
+        decision.evaluated_at_timestamp_ms
+    );
+    for candidate in &decision.candidates {
+        if candidate.eligible {
+            println!(
+                "  {} · score={}/10000 · cost={} microUSD · home={} · model={}",
+                candidate.candidate_id,
+                candidate.total_score_basis_points.unwrap_or(0),
+                candidate.estimated_cost_microusd,
+                display(candidate.identity.home_id.as_deref()),
+                display(candidate.identity.model.as_deref())
+            );
+            for component in &candidate.components {
+                println!(
+                    "    {}: {}/10000 × {}bp = {} · {}",
+                    component.name,
+                    component.score_basis_points,
+                    component.weight_basis_points,
+                    component.weighted_points,
+                    component.reason
+                );
+            }
+        } else {
+            println!(
+                "  {} · rejected · {}",
+                candidate.candidate_id,
+                candidate.rejection_reasons.join("; ")
+            );
+        }
+    }
+}
+
 fn print_observability_summary(report: &ObservabilitySummary) {
     let totals = &report.totals;
     println!(
-        "CodexHome Observability · {} event(s) · {} task(s) · {} run(s) · {} attempt(s)",
-        report.event_count, totals.tasks, totals.runs, totals.attempts
+        "CodexHome Observability · {} event(s) · {} task(s) · {} run(s) · {} attempt(s) · {} route decision(s)",
+        report.event_count,
+        totals.tasks,
+        totals.runs,
+        totals.attempts,
+        totals.route_decisions
     );
     println!("{}", report.store_path);
     println!();

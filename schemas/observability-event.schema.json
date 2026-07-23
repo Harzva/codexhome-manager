@@ -29,6 +29,7 @@
         "tool_call_completed",
         "artifact_created",
         "verification_completed",
+        "route_decided",
         "run_completed",
         "run_failed",
         "quota_snapshot",
@@ -193,6 +194,13 @@
           "minLength": 1,
           "maxLength": 2048
         },
+        "routeDecisionId": { "$ref": "#/$defs/nullableIdentifier" },
+        "routing": {
+          "oneOf": [
+            { "$ref": "#/$defs/routeDecisionDetails" },
+            { "type": "null" }
+          ]
+        },
         "transition": {
           "oneOf": [
             { "$ref": "#/$defs/attemptTransition" },
@@ -253,6 +261,137 @@
       "properties": {
         "kind": { "enum": ["initial", "retry", "migration"] },
         "fromAttemptId": { "$ref": "#/$defs/nullableIdentifier" }
+      }
+    },
+    "routeDecisionDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "policyId",
+        "policyRevision",
+        "evaluatedAtTimestampMs",
+        "observedEventCount",
+        "request",
+        "selectedCandidateId",
+        "selectedScoreBasisPoints",
+        "estimatedCostMicrousd",
+        "evaluatedCandidates",
+        "eligibleCandidates",
+        "homeLocked",
+        "modelLocked",
+        "sensitiveDirectory",
+        "reasons",
+        "rejectionSummary",
+        "candidates"
+      ],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/identifier" },
+        "policyId": { "$ref": "#/$defs/identifier" },
+        "policyRevision": { "type": "integer", "minimum": 0 },
+        "evaluatedAtTimestampMs": { "type": "integer", "minimum": 0 },
+        "observedEventCount": { "type": "integer", "minimum": 0 },
+        "request": { "$ref": "route-request.schema.json" },
+        "selectedCandidateId": { "$ref": "#/$defs/nullableIdentifier" },
+        "selectedScoreBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "estimatedCostMicrousd": { "type": ["integer", "null"], "minimum": 0 },
+        "evaluatedCandidates": { "type": "integer", "minimum": 0 },
+        "eligibleCandidates": { "type": "integer", "minimum": 0 },
+        "homeLocked": { "type": "boolean" },
+        "modelLocked": { "type": "boolean" },
+        "sensitiveDirectory": { "type": "boolean" },
+        "reasons": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "rejectionSummary": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "candidates": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/routeCandidateSnapshot" }
+        }
+      }
+    },
+    "routeCandidateSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "identity",
+        "eligible",
+        "totalScoreBasisPoints",
+        "estimatedCostMicrousd",
+        "historicalAttempts",
+        "historicalSuccessBasisPoints",
+        "activeAttempts",
+        "quotaRemainingBasisPoints",
+        "components",
+        "reasons",
+        "rejectionReasons"
+      ],
+      "properties": {
+        "candidateId": { "$ref": "#/$defs/identifier" },
+        "identity": { "$ref": "#/$defs/identity" },
+        "eligible": { "type": "boolean" },
+        "totalScoreBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "estimatedCostMicrousd": { "type": "integer", "minimum": 0 },
+        "historicalAttempts": { "type": "integer", "minimum": 0 },
+        "historicalSuccessBasisPoints": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "activeAttempts": { "type": "integer", "minimum": 0 },
+        "quotaRemainingBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/routeScoreSnapshot" }
+        },
+        "reasons": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        },
+        "rejectionReasons": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      }
+    },
+    "routeScoreSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "scoreBasisPoints",
+        "weightBasisPoints",
+        "weightedPoints",
+        "reason"
+      ],
+      "properties": {
+        "name": { "$ref": "#/$defs/label" },
+        "scoreBasisPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "weightBasisPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "weightedPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
       }
     },
     "safety": {

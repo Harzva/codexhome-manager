@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "codexhome.route-policy.v1",
+  "policyId": "local-control-plane",
+  "revision": 1,
+  "weights": {
+    "taskFit": 1800,
+    "modelStrength": 1400,
+    "contextHeadroom": 900,
+    "quota": 1000,
+    "historicalSuccess": 1500,
+    "speed": 900,
+    "cost": 1000,
+    "load": 900,
+    "health": 600
+  },
+  "taskRules": [
+    {
+      "taskKind": "simple_code",
+      "preferredSpecialties": ["spark", "coding"],
+      "requiredCapabilities": ["coding"],
+      "minimumModelStrengthBasisPoints": null,
+      "weights": null
+    },
+    {
+      "taskKind": "architecture",
+      "preferredSpecialties": ["architecture", "reasoning"],
+      "requiredCapabilities": ["coding"],
+      "minimumModelStrengthBasisPoints": 8000,
+      "weights": null
+    },
+    {
+      "taskKind": "long_document",
+      "preferredSpecialties": ["long-context", "documents"],
+      "requiredCapabilities": ["long-context"],
+      "minimumModelStrengthBasisPoints": null,
+      "weights": null
+    },
+    {
+      "taskKind": "batch",
+      "preferredSpecialties": ["batch", "low-cost"],
+      "requiredCapabilities": [],
+      "minimumModelStrengthBasisPoints": null,
+      "weights": {
+        "taskFit": 1600,
+        "modelStrength": 600,
+        "contextHeadroom": 600,
+        "quota": 1200,
+        "historicalSuccess": 1200,
+        "speed": 1000,
+        "cost": 2600,
+        "load": 800,
+        "health": 400
+      }
+    }
+  ],
+  "candidates": [
+    {
+      "candidateId": "spark-local",
+      "enabled": true,
+      "homeId": "replace-with-spark-registry-id",
+      "homeAlias": "@spark",
+      "accountId": "spark-account",
+      "provider": "replace-with-provider",
+      "model": "replace-with-spark-model",
+      "specialties": ["spark", "coding", "low-cost"],
+      "capabilities": ["coding"],
+      "securityDomains": ["local"],
+      "maxContextTokens": 128000,
+      "modelStrengthBasisPoints": 6500,
+      "inputCostMicrousdPerMillionTokens": 0,
+      "outputCostMicrousdPerMillionTokens": 0,
+      "maxConcurrentRuns": 4,
+      "baselineDurationMs": 15000
+    },
+    {
+      "candidateId": "primary-strong",
+      "enabled": true,
+      "homeId": "replace-with-primary-registry-id",
+      "homeAlias": "@primary",
+      "accountId": "primary-account",
+      "provider": "replace-with-provider",
+      "model": "replace-with-strong-model",
+      "specialties": ["architecture", "reasoning", "coding"],
+      "capabilities": ["coding", "long-context"],
+      "securityDomains": ["local", "local-sensitive"],
+      "maxContextTokens": 512000,
+      "modelStrengthBasisPoints": 9500,
+      "inputCostMicrousdPerMillionTokens": 0,
+      "outputCostMicrousdPerMillionTokens": 0,
+      "maxConcurrentRuns": 2,
+      "baselineDurationMs": 45000
+    },
+    {
+      "candidateId": "long-context",
+      "enabled": true,
+      "homeId": "replace-with-research-registry-id",
+      "homeAlias": "@research",
+      "accountId": "research-account",
+      "provider": "replace-with-provider",
+      "model": "replace-with-long-context-model",
+      "specialties": ["long-context", "documents", "retrieval"],
+      "capabilities": ["long-context", "retrieval"],
+      "securityDomains": ["local"],
+      "maxContextTokens": 1000000,
+      "modelStrengthBasisPoints": 8200,
+      "inputCostMicrousdPerMillionTokens": 0,
+      "outputCostMicrousdPerMillionTokens": 0,
+      "maxConcurrentRuns": 2,
+      "baselineDurationMs": 60000
+    }
+  ],
+  "historyPriorSuccessBasisPoints": 5000,
+  "historyPriorAttempts": 4,
+  "unknownQuotaBasisPoints": 5000,
+  "unknownHealthBasisPoints": 7000
+}

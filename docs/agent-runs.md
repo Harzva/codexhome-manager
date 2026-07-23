@@ -6,6 +6,7 @@ Agent Runs separate a durable task from any one Codex conversation or model atte
 Task
   -> Run
       -> Attempts
+      -> Route decisions
       -> Threads and forks
       -> Tool calls
       -> Artifacts
@@ -31,6 +32,13 @@ codexhome run attempt start <run-id> \
   --model gpt-5.5 \
   --route-reason "complex architecture task"
 ```
+
+An explainable policy decision may be recorded before the Attempt. Pass its
+event ID as `--route-decision-id`; trace verification then requires the Attempt
+Home, account, and model to match the selected identity. `route decide`
+evaluates current load and appends under one event-store lock. `run show`
+preserves the evaluation timestamp, observed-event count, and complete candidate
+runtime/score snapshot plus the bounded route request under `routeDecisions`.
 
 Record the complete usage delta on the terminal Attempt event:
 
@@ -96,3 +104,4 @@ Canonical JSON Schemas:
 - [Agent Run list](../schemas/agent-runs.schema.json)
 - [Agent Run detail](../schemas/agent-run.schema.json)
 - [Agent Run mutation](../schemas/agent-run-mutation.schema.json)
+- [Route decision](../schemas/route-decision.schema.json)

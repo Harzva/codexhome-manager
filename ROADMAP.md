@@ -29,6 +29,16 @@ The detailed product roadmap was developed before repository initialization. Thi
 - Failed-attempt cost, artifacts, verification, final-result IDs, and recovery advice.
 - Versioned CLI JSON plus JSON/CSV export.
 
+## v0.2.2 — Explainable Policy Router core ✅
+
+- Versioned route request, policy, decision, and event contracts.
+- Registry availability plus live quota, health, rate-limit, load, duration, and success inputs.
+- Hard constraints for locks, capabilities, context, security domains, cost, and concurrency.
+- Nine itemized weighted score components with deterministic tie-breaking.
+- Immutable candidate/score snapshots linked to Agent Runs and Attempts.
+- Atomic decision recording with evaluation time and observed-event-count provenance.
+- `route validate`, `route recommend`, and `route decide` CLI flows.
+
 ## v0.3 — Skill placement
 
 - Skill Space manifests and capacity budgets.

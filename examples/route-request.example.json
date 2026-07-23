@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "codexhome.route-request.v1",
+  "requestId": "request-example-1",
+  "taskKind": "architecture",
+  "estimatedContextTokens": 80000,
+  "estimatedOutputTokens": 12000,
+  "requiredCapabilities": ["coding"],
+  "preferredSpecialties": ["architecture"],
+  "sensitiveDirectory": false,
+  "requiredSecurityDomain": null,
+  "lockedHome": null,
+  "lockedModel": null,
+  "maxEstimatedCostMicrousd": null,
+  "allowDegraded": false
+}

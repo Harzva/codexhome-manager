@@ -36,6 +36,15 @@ Current Agent Run state:
 - uses an owner-only event file and only changes permissions on directories it creates;
 - validates transitions and budgets under one exclusive append lock.
 
+Current policy routing:
+
+- accepts bounded task metadata, capability labels, cost estimates, and opaque identity labels;
+- never stores prompts, source text, sensitive directory paths, or credential values;
+- requires `sensitiveDirectory` requests to lock an explicit Home;
+- treats unavailable Homes, invalid auth, exhausted quota, active rate limits, and missing security domains as hard constraints;
+- records the policy revision, complete candidate score snapshot, and rejection reasons in the same owner-only event stream;
+- rejects an Attempt that links a route decision but changes its selected Home, account, or model.
+
 Future process execution features must:
 
 - use explicit target Homes;

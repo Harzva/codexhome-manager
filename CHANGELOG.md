@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - Token, duration, cost, and Attempt budgets with failed-attempt attribution.
 - Thread, tool, opaque artifact, verification, final-artifact, and recovery tracking.
 - Versioned `task` and `run` CLI JSON contracts and public schemas.
+- Explainable Home/account/model routing with hard constraints and user locks.
+- Immutable route candidate, score, cost, and rejection snapshots in Agent Run events.
+- Atomic route evaluation/append with evaluation timestamps and observed-event counts.
+- Versioned `route validate`, `route recommend`, and `route decide` CLI contracts.
 
 ### Security
 
@@ -22,6 +26,8 @@ All notable changes to this project will be documented in this file.
 - GitHub private vulnerability reporting replaces public security issues.
 - Agent Run events reject obvious secrets and undeclared local paths.
 - Existing event-store parent directories keep their permissions; files remain owner-only.
+- Sensitive-directory requests require an explicit locked Home and record no directory path.
+- Linked Attempts must match the Home, account, and model selected by their route decision.
 
 ## [0.2.0-alpha.1]
 

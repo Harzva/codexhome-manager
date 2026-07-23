@@ -1,0 +1,156 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/route-policy.schema.json",
+  "title": "CodexHome Route Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "policyId", "revision", "candidates"],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.route-policy.v1" },
+    "policyId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "weights": { "$ref": "#/$defs/weights" },
+    "taskRules": {
+      "type": "array",
+      "maxItems": 7,
+      "items": { "$ref": "#/$defs/taskRule" }
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "historyPriorSuccessBasisPoints": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "historyPriorAttempts": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "unknownQuotaBasisPoints": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "unknownHealthBasisPoints": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    }
+  },
+  "$defs": {
+    "taskKind": {
+      "$ref": "route-request.schema.json#/$defs/taskKind"
+    },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskFit",
+        "modelStrength",
+        "contextHeadroom",
+        "quota",
+        "historicalSuccess",
+        "speed",
+        "cost",
+        "load",
+        "health"
+      ],
+      "properties": {
+        "taskFit": { "$ref": "#/$defs/basisPoints" },
+        "modelStrength": { "$ref": "#/$defs/basisPoints" },
+        "contextHeadroom": { "$ref": "#/$defs/basisPoints" },
+        "quota": { "$ref": "#/$defs/basisPoints" },
+        "historicalSuccess": { "$ref": "#/$defs/basisPoints" },
+        "speed": { "$ref": "#/$defs/basisPoints" },
+        "cost": { "$ref": "#/$defs/basisPoints" },
+        "load": { "$ref": "#/$defs/basisPoints" },
+        "health": { "$ref": "#/$defs/basisPoints" }
+      }
+    },
+    "taskRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskKind"],
+      "properties": {
+        "taskKind": { "$ref": "#/$defs/taskKind" },
+        "preferredSpecialties": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+        },
+        "minimumModelStrengthBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "weights": {
+          "oneOf": [
+            { "$ref": "#/$defs/weights" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateId",
+        "homeId",
+        "model",
+        "maxContextTokens",
+        "modelStrengthBasisPoints",
+        "inputCostMicrousdPerMillionTokens",
+        "outputCostMicrousdPerMillionTokens"
+      ],
+      "properties": {
+        "candidateId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "enabled": { "type": "boolean", "default": true },
+        "homeId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "homeAlias": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+        "accountId": {
+          "$ref": "observability-event.schema.json#/$defs/nullableIdentifier"
+        },
+        "provider": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+        "model": { "$ref": "observability-event.schema.json#/$defs/label" },
+        "specialties": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+        },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+        },
+        "securityDomains": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+        },
+        "maxContextTokens": { "type": "integer", "minimum": 1 },
+        "modelStrengthBasisPoints": { "$ref": "#/$defs/basisPoints" },
+        "inputCostMicrousdPerMillionTokens": { "type": "integer", "minimum": 0 },
+        "outputCostMicrousdPerMillionTokens": { "type": "integer", "minimum": 0 },
+        "maxConcurrentRuns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 1
+        },
+        "baselineDurationMs": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "basisPoints": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    }
+  }
+}
