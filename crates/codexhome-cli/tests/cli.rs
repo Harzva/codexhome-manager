@@ -25,6 +25,21 @@ fn run_json(store: &Path, args: &[&str]) -> Value {
     serde_json::from_slice(&output.stdout).expect("valid JSON output")
 }
 
+fn run_git(repository: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn root_help_is_useful() {
     let output = binary().arg("--help").output().expect("run help");
@@ -796,4 +811,191 @@ fn route_cli_records_explainable_decision_and_binds_attempt_identity() {
             .is_some_and(|reason| !reason.is_empty())
     );
     assert_eq!(report["run"]["attempts"][0]["routeDecisionId"], route_event);
+}
+
+#[test]
+fn worktree_cli_runs_prepare_evidence_review_conflict_and_completion_gates() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = temp.path().join("state/events.jsonl");
+    let repository = temp.path().join("repository");
+    let worktree_path = temp.path().join("worktree");
+    fs::create_dir_all(&repository).expect("repository");
+    run_git(&repository, &["init"]);
+    run_git(&repository, &["config", "user.name", "CLI Test"]);
+    run_git(
+        &repository,
+        &["config", "user.email", "cli@example.invalid"],
+    );
+    fs::write(repository.join("README.md"), "initial\n").expect("seed");
+    run_git(&repository, &["add", "README.md"]);
+    run_git(&repository, &["commit", "-m", "initial"]);
+
+    run_json(
+        &store,
+        &[
+            "task",
+            "create",
+            "--task-id",
+            "task-worktree",
+            "--label",
+            "Implement isolated feature",
+        ],
+    );
+    run_json(
+        &store,
+        &["run", "start", "task-worktree", "--run-id", "run-worktree"],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "attempt",
+            "start",
+            "run-worktree",
+            "--attempt-id",
+            "attempt-worktree",
+            "--home-id",
+            "home-executor",
+            "--model",
+            "executor-model",
+        ],
+    );
+
+    let prepare = binary()
+        .args([
+            "run",
+            "worktree",
+            "prepare",
+            "run-worktree",
+            "attempt-worktree",
+            "--repository",
+        ])
+        .arg(&repository)
+        .arg("--path")
+        .arg(&worktree_path)
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("prepare worktree");
+    assert!(
+        prepare.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prepare.stderr)
+    );
+    let prepare: Value = serde_json::from_slice(&prepare.stdout).expect("prepare JSON");
+    assert_eq!(
+        prepare["schemaVersion"],
+        "codexhome.worktree-prepare-record.v1"
+    );
+    assert_eq!(prepare["prepared"]["created"], true);
+    assert_eq!(
+        prepare["prepared"]["plan"]["worktreePath"],
+        worktree_path
+            .canonicalize()
+            .expect("canonical worktree")
+            .display()
+            .to_string()
+    );
+
+    fs::write(worktree_path.join("feature.txt"), "implemented\n").expect("feature");
+    run_git(&worktree_path, &["add", "feature.txt"]);
+    run_git(&worktree_path, &["commit", "-m", "implement feature"]);
+    let evidence = run_json(
+        &store,
+        &[
+            "run",
+            "worktree",
+            "evidence",
+            "run-worktree",
+            "attempt-worktree",
+            "--evidence-id",
+            "evidence-cli",
+            "--test-label",
+            "true smoke",
+            "--test-program",
+            "/usr/bin/true",
+        ],
+    );
+    assert_eq!(
+        evidence["schemaVersion"],
+        "codexhome.worktree-evidence-record.v1"
+    );
+    assert_eq!(evidence["evidence"]["details"]["testsSucceeded"], true);
+    assert_eq!(evidence["evidence"]["details"]["worktreeClean"], true);
+    run_json(
+        &store,
+        &[
+            "run",
+            "attempt",
+            "complete",
+            "run-worktree",
+            "attempt-worktree",
+            "--input-tokens",
+            "10",
+            "--output-tokens",
+            "5",
+            "--duration-ms",
+            "20",
+            "--estimated-cost-microusd",
+            "1",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "worktree",
+            "review",
+            "run-worktree",
+            "attempt-worktree",
+            "evidence-cli",
+            "--decision",
+            "approved",
+            "--reason",
+            "patch and tests reviewed",
+            "--home-id",
+            "home-reviewer",
+            "--model",
+            "reviewer-model",
+        ],
+    );
+    let conflict = run_json(
+        &store,
+        &[
+            "run",
+            "worktree",
+            "conflict-check",
+            "run-worktree",
+            "attempt-worktree",
+            "evidence-cli",
+            "--target-ref",
+            "HEAD",
+            "--home-id",
+            "home-reviewer",
+            "--model",
+            "reviewer-model",
+        ],
+    );
+    assert_eq!(
+        conflict["schemaVersion"],
+        "codexhome.worktree-conflict-record.v1"
+    );
+    assert_eq!(conflict["conflict"]["details"]["conflictFree"], true);
+    run_json(&store, &["run", "complete", "run-worktree"]);
+
+    let report = run_json(&store, &["run", "show", "run-worktree"]);
+    assert_eq!(report["run"]["status"], "succeeded");
+    assert_eq!(
+        report["run"]["worktree"]["evidence"][0]["details"]["evidenceId"],
+        "evidence-cli"
+    );
+    assert_eq!(
+        report["run"]["worktree"]["reviews"][0]["reviewer"]["homeId"],
+        "home-reviewer"
+    );
+    assert_eq!(
+        report["run"]["worktree"]["conflictChecks"][0]["details"]["conflictFree"],
+        true
+    );
 }

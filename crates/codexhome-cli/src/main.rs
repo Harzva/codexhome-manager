@@ -4,10 +4,13 @@ use codexhome_core::{
     discover, doctor, generate_id, observability_events_csv, parse_observability_events,
     parse_route_request, AgentRunAction, AgentRunMutationReport, AgentRunReport, AgentRunStore,
     AgentRunView, AttemptTransition, AttemptTransitionKind, CodexHomeSummary, DiscoveryOptions,
-    DiscoveryReport, ExecutionIdentity, FailureInfo, HomeManager, HomeMutationResult,
-    ObservabilityFilter, ObservabilityStatus, ObservabilityStore, ObservabilitySummary,
-    RegisteredHomeView, RegistryReport, RegistryStore, RouteDecision, RouteEngine, RouteHomeState,
-    RoutePolicyStore, RunBudget, UsageDelta,
+    DiscoveryReport, ExecutionIdentity, FailureInfo, GitWorktreeManager, HomeManager,
+    HomeMutationResult, ObservabilityFilter, ObservabilityStatus, ObservabilityStore,
+    ObservabilitySummary, RegisteredHomeView, RegistryReport, RegistryStore, RouteDecision,
+    RouteEngine, RouteHomeState, RoutePolicyStore, RunBudget, SafetySummary, UsageDelta,
+    WorktreeAssignment, WorktreeConflictDisposition, WorktreeConflictOptions,
+    WorktreeEvidenceOptions, WorktreePlan, WorktreePrepareOptions, WorktreePreparedDetails,
+    WorktreeReviewDecision, WorktreeReviewDetails, WORKTREE_PLAN_SCHEMA_VERSION,
 };
 use serde_json::json;
 use std::fs;
@@ -181,6 +184,11 @@ enum RunCommand {
         #[command(subcommand)]
         command: VerificationCommand,
     },
+    /// Prepare isolated Git worktrees and record evidence, review, and conflict gates.
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommand,
+    },
     /// Complete a run after all attempts are terminal.
     Complete {
         run_id: String,
@@ -322,6 +330,66 @@ enum VerificationCommand {
         succeeded: bool,
         #[arg(long, default_value_t = 0)]
         duration_ms: u64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorktreeCommand {
+    /// Plan or create a unique branch and isolated worktree for one active attempt.
+    Prepare {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long, value_name = "PATH")]
+        repository: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        path: Option<PathBuf>,
+        #[arg(long, default_value = "HEAD")]
+        base_ref: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Capture committed diff evidence and execute one test without a shell.
+    Evidence {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long)]
+        evidence_id: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        evidence_root: Option<PathBuf>,
+        #[arg(long)]
+        test_label: String,
+        #[arg(long)]
+        test_program: String,
+        #[arg(last = true)]
+        test_args: Vec<String>,
+    },
+    /// Record an independent main-reviewer decision for one evidence snapshot.
+    Review {
+        run_id: String,
+        attempt_id: String,
+        evidence_id: String,
+        #[arg(long)]
+        review_id: Option<String>,
+        #[arg(long, value_enum)]
+        decision: ReviewDecisionArg,
+        #[arg(long)]
+        reason: String,
+        #[command(flatten)]
+        reviewer: IdentityArgs,
+    },
+    /// Check the reviewed HEAD against a target ref and record conflict disposition.
+    ConflictCheck {
+        run_id: String,
+        attempt_id: String,
+        evidence_id: String,
+        #[arg(long)]
+        check_id: Option<String>,
+        #[arg(long, default_value = "main")]
+        target_ref: String,
+        #[arg(long, value_enum, default_value_t = ConflictDispositionArg::Human)]
+        on_conflict: ConflictDispositionArg,
+        #[command(flatten)]
+        reviewer: IdentityArgs,
     },
 }
 
@@ -657,6 +725,38 @@ impl From<FailureStatusArg> for ObservabilityStatus {
             FailureStatusArg::Failed => Self::Failed,
             FailureStatusArg::Cancelled => Self::Cancelled,
             FailureStatusArg::TimedOut => Self::TimedOut,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ReviewDecisionArg {
+    Approved,
+    ChangesRequested,
+    Rejected,
+}
+
+impl From<ReviewDecisionArg> for WorktreeReviewDecision {
+    fn from(value: ReviewDecisionArg) -> Self {
+        match value {
+            ReviewDecisionArg::Approved => Self::Approved,
+            ReviewDecisionArg::ChangesRequested => Self::ChangesRequested,
+            ReviewDecisionArg::Rejected => Self::Rejected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ConflictDispositionArg {
+    Human,
+    Replan,
+}
+
+impl From<ConflictDispositionArg> for WorktreeConflictDisposition {
+    fn from(value: ConflictDispositionArg) -> Self {
+        match value {
+            ConflictDispositionArg::Human => Self::HumanRequired,
+            ConflictDispositionArg::Replan => Self::ReplanRequested,
         }
     }
 }
@@ -1102,6 +1202,9 @@ fn run_agent_run(
                 json,
             )?;
         }
+        RunCommand::Worktree { command } => {
+            return run_worktree_command(command, &store, json);
+        }
         RunCommand::Complete {
             run_id,
             final_artifact_ids,
@@ -1140,6 +1243,264 @@ fn run_agent_run(
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_worktree_command(
+    command: WorktreeCommand,
+    store: &AgentRunStore,
+    json: bool,
+) -> Result<ExitCode> {
+    match command {
+        WorktreeCommand::Prepare {
+            run_id,
+            attempt_id,
+            repository,
+            path,
+            base_ref,
+            dry_run,
+        } => {
+            let report = store.report()?;
+            let run = report.run(&run_id)?;
+            let task = report.task(&run.task_id)?;
+            let attempt = run
+                .attempts
+                .iter()
+                .find(|attempt| attempt.attempt_id == attempt_id)
+                .with_context(|| format!("attemptId '{attempt_id}' was not found"))?;
+            let plan = GitWorktreeManager::plan(
+                &WorktreeAssignment {
+                    task_id: task.task_id.clone(),
+                    task_label: task.label.clone(),
+                    run_id: run_id.clone(),
+                    attempt_id: attempt_id.clone(),
+                    identity: attempt.identity.clone(),
+                },
+                &WorktreePrepareOptions {
+                    repository,
+                    worktree_path: path,
+                    base_ref,
+                },
+            )?;
+            if dry_run {
+                output(json, &plan, || {
+                    println!(
+                        "{} -> {} ({})",
+                        plan.branch, plan.worktree_path, plan.base_commit
+                    );
+                })?;
+                return Ok(ExitCode::SUCCESS);
+            }
+            let prepared = GitWorktreeManager::prepare(plan.clone())?;
+            let action = AgentRunAction::RecordWorktreePrepared {
+                run_id,
+                attempt_id,
+                details: WorktreePreparedDetails {
+                    repository_root: plan.repository_root.clone(),
+                    worktree_path: plan.worktree_path.clone(),
+                    branch: plan.branch.clone(),
+                    base_ref: plan.base_ref.clone(),
+                    base_commit: plan.base_commit.clone(),
+                    head_commit: prepared.head_commit.clone(),
+                },
+            };
+            let mutation = match store.apply(action) {
+                Ok(mutation) => mutation,
+                Err(error) => {
+                    return match GitWorktreeManager::rollback(&plan) {
+                        Ok(()) => Err(error.context(
+                            "worktree was rolled back because its run event could not be recorded",
+                        )),
+                        Err(rollback) => Err(error.context(format!(
+                            "run event failed and worktree rollback also failed: {rollback:#}"
+                        ))),
+                    };
+                }
+            };
+            let envelope = json!({
+                "ok": true,
+                "schemaVersion": "codexhome.worktree-prepare-record.v1",
+                "prepared": prepared,
+                "eventId": mutation.event_id,
+                "run": mutation.run,
+                "safety": mutation.safety,
+            });
+            output(json, &envelope, || {
+                println!("Prepared {} at {}.", plan.branch, plan.worktree_path);
+                println!("Recorded event {}.", mutation.event_id);
+            })?;
+            Ok(ExitCode::SUCCESS)
+        }
+        WorktreeCommand::Evidence {
+            run_id,
+            attempt_id,
+            evidence_id,
+            evidence_root,
+            test_label,
+            test_program,
+            test_args,
+        } => {
+            let report = store.report()?;
+            let run = report.run(&run_id)?;
+            let plan = worktree_plan_from_run(&report, run)?;
+            let evidence_root = evidence_root.unwrap_or_else(|| {
+                store
+                    .path()
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join("worktree-evidence")
+            });
+            let evidence = GitWorktreeManager::collect_evidence(
+                &plan,
+                &WorktreeEvidenceOptions {
+                    evidence_id: evidence_id.unwrap_or_else(|| generate_id("evidence")),
+                    evidence_root,
+                    test_label,
+                    test_program,
+                    test_args,
+                },
+            )?;
+            let mutation = store.apply(AgentRunAction::RecordWorktreeEvidence {
+                run_id,
+                attempt_id,
+                details: evidence.details.clone(),
+            })?;
+            let succeeded = evidence.details.worktree_clean && evidence.details.tests_succeeded;
+            let envelope = json!({
+                "ok": succeeded,
+                "schemaVersion": "codexhome.worktree-evidence-record.v1",
+                "evidence": evidence,
+                "eventId": mutation.event_id,
+                "run": mutation.run,
+                "safety": mutation.safety,
+            });
+            output(json, &envelope, || {
+                println!(
+                    "Evidence {}: {} commit(s), {} file(s), tests={}.",
+                    evidence.details.evidence_id,
+                    evidence.details.commit_count,
+                    evidence.details.changed_files,
+                    if evidence.details.tests_succeeded {
+                        "passed"
+                    } else {
+                        "failed"
+                    }
+                );
+                println!("Recorded event {}.", mutation.event_id);
+            })?;
+            Ok(if succeeded {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+        WorktreeCommand::Review {
+            run_id,
+            attempt_id,
+            evidence_id,
+            review_id,
+            decision,
+            reason,
+            reviewer,
+        } => {
+            let mut identity: ExecutionIdentity = reviewer.into();
+            identity.agent_role = Some("main_reviewer".to_owned());
+            let mutation = store.apply(AgentRunAction::RecordWorktreeReview {
+                run_id,
+                attempt_id,
+                identity,
+                details: WorktreeReviewDetails {
+                    review_id: review_id.unwrap_or_else(|| generate_id("review")),
+                    evidence_id,
+                    decision: decision.into(),
+                    reason,
+                },
+            })?;
+            output_run_mutation(&mutation, json)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        WorktreeCommand::ConflictCheck {
+            run_id,
+            attempt_id,
+            evidence_id,
+            check_id,
+            target_ref,
+            on_conflict,
+            reviewer,
+        } => {
+            let report = store.report()?;
+            let run = report.run(&run_id)?;
+            let plan = worktree_plan_from_run(&report, run)?;
+            let conflict = GitWorktreeManager::check_conflicts(
+                &plan,
+                &WorktreeConflictOptions {
+                    check_id: check_id.unwrap_or_else(|| generate_id("conflict")),
+                    evidence_id,
+                    target_ref,
+                    on_conflict: on_conflict.into(),
+                },
+            )?;
+            let mut identity: ExecutionIdentity = reviewer.into();
+            identity.agent_role = Some("main_reviewer".to_owned());
+            let mutation = store.apply(AgentRunAction::RecordWorktreeConflict {
+                run_id,
+                attempt_id,
+                identity,
+                details: conflict.details.clone(),
+            })?;
+            let envelope = json!({
+                "ok": conflict.details.conflict_free,
+                "schemaVersion": "codexhome.worktree-conflict-record.v1",
+                "conflict": conflict,
+                "eventId": mutation.event_id,
+                "run": mutation.run,
+                "safety": mutation.safety,
+            });
+            output(json, &envelope, || {
+                println!(
+                    "Conflict check {}: {}.",
+                    conflict.details.check_id,
+                    if conflict.details.conflict_free {
+                        "clear"
+                    } else {
+                        "human or replan required"
+                    }
+                );
+                println!("Recorded event {}.", mutation.event_id);
+            })?;
+            Ok(if conflict.details.conflict_free {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+    }
+}
+
+fn worktree_plan_from_run(report: &AgentRunReport, run: &AgentRunView) -> Result<WorktreePlan> {
+    let task = report.task(&run.task_id)?;
+    let worktree = run
+        .worktree
+        .as_ref()
+        .with_context(|| format!("runId '{}' has no prepared worktree", run.run_id))?;
+    Ok(WorktreePlan {
+        ok: true,
+        schema_version: WORKTREE_PLAN_SCHEMA_VERSION,
+        task_id: task.task_id.clone(),
+        run_id: run.run_id.clone(),
+        attempt_id: worktree.attempt_id.clone(),
+        repository_root: worktree.details.repository_root.clone(),
+        worktree_path: worktree.details.worktree_path.clone(),
+        branch: worktree.details.branch.clone(),
+        base_ref: worktree.details.base_ref.clone(),
+        base_commit: worktree.details.base_commit.clone(),
+        responsible_identity: worktree.responsible_identity.clone(),
+        safety: SafetySummary {
+            secrets_redacted: true,
+            includes_secrets: false,
+            reads_auth_contents: false,
+            includes_local_paths: true,
+        },
+    })
 }
 
 fn apply_run_action(store: &AgentRunStore, action: AgentRunAction, json: bool) -> Result<()> {
@@ -1614,6 +1975,34 @@ fn print_agent_run(run: &AgentRunView) {
                 .saturating_add(attempt.usage.output_tokens),
             attempt.usage.duration_ms
         );
+    }
+    if let Some(worktree) = &run.worktree {
+        let latest_evidence = worktree
+            .evidence
+            .last()
+            .map(|evidence| evidence.details.evidence_id.as_str())
+            .unwrap_or("-");
+        let latest_review = worktree
+            .reviews
+            .last()
+            .map(|review| format!("{:?}", review.details.decision))
+            .unwrap_or_else(|| "none".to_owned());
+        let latest_conflict = worktree
+            .conflict_checks
+            .last()
+            .map(|check| {
+                if check.details.conflict_free {
+                    "clear"
+                } else {
+                    "blocked"
+                }
+            })
+            .unwrap_or("unchecked");
+        println!(
+            "  worktree {} · evidence={} · review={} · conflicts={}",
+            worktree.details.branch, latest_evidence, latest_review, latest_conflict
+        );
+        println!("    {}", worktree.details.worktree_path);
     }
 }
 

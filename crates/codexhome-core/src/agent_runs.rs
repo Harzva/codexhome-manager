@@ -3,7 +3,9 @@ use crate::{
     FailureInfo, ObservabilityEvent, ObservabilityEventType, ObservabilityStatus,
     ObservabilityStore, RouteCandidateDecisionSnapshot, RouteDecision, RouteDecisionDetails,
     RouteEngine, RouteHomeState, RoutePolicy, RouteRequest, RouteScoreSnapshot, RunBudget,
-    SafetySummary, TaskDescriptor, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
+    SafetySummary, TaskDescriptor, TraceContext, UsageDelta, WorktreeConflictDetails,
+    WorktreeEvidenceDetails, WorktreePreparedDetails, WorktreeReviewDecision,
+    WorktreeReviewDetails, OBSERVABILITY_EVENT_SCHEMA_VERSION,
 };
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
@@ -41,6 +43,28 @@ pub enum AgentRunAction {
     RecordRouteDecision {
         run_id: String,
         decision: Box<RouteDecision>,
+    },
+    RecordWorktreePrepared {
+        run_id: String,
+        attempt_id: String,
+        details: WorktreePreparedDetails,
+    },
+    RecordWorktreeEvidence {
+        run_id: String,
+        attempt_id: String,
+        details: WorktreeEvidenceDetails,
+    },
+    RecordWorktreeReview {
+        run_id: String,
+        attempt_id: String,
+        identity: ExecutionIdentity,
+        details: WorktreeReviewDetails,
+    },
+    RecordWorktreeConflict {
+        run_id: String,
+        attempt_id: String,
+        identity: ExecutionIdentity,
+        details: WorktreeConflictDetails,
     },
     CompleteAttempt {
         run_id: String,
@@ -109,6 +133,10 @@ impl AgentRunAction {
                 AttemptTransitionKind::Migration => "migrate_attempt",
             },
             Self::RecordRouteDecision { .. } => "record_route_decision",
+            Self::RecordWorktreePrepared { .. } => "record_worktree_prepared",
+            Self::RecordWorktreeEvidence { .. } => "record_worktree_evidence",
+            Self::RecordWorktreeReview { .. } => "record_worktree_review",
+            Self::RecordWorktreeConflict { .. } => "record_worktree_conflict",
             Self::CompleteAttempt { .. } => "complete_attempt",
             Self::FailAttempt { .. } => "fail_attempt",
             Self::LinkThread { .. } => "link_thread",
@@ -149,6 +177,18 @@ impl AgentRunAction {
                 run_id, attempt_id, ..
             }
             | Self::RecordVerification {
+                run_id, attempt_id, ..
+            }
+            | Self::RecordWorktreePrepared {
+                run_id, attempt_id, ..
+            }
+            | Self::RecordWorktreeEvidence {
+                run_id, attempt_id, ..
+            }
+            | Self::RecordWorktreeReview {
+                run_id, attempt_id, ..
+            }
+            | Self::RecordWorktreeConflict {
                 run_id, attempt_id, ..
             } => {
                 let run = report.run(run_id)?;
@@ -286,6 +326,41 @@ pub struct AgentVerificationView {
     pub completed_at_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWorktreeEvidenceView {
+    pub recorded_at_ms: u64,
+    pub details: WorktreeEvidenceDetails,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWorktreeReviewView {
+    pub reviewed_at_ms: u64,
+    pub reviewer: ExecutionIdentity,
+    pub details: WorktreeReviewDetails,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWorktreeConflictView {
+    pub checked_at_ms: u64,
+    pub checker: ExecutionIdentity,
+    pub details: WorktreeConflictDetails,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentWorktreeView {
+    pub attempt_id: String,
+    pub prepared_at_ms: u64,
+    pub responsible_identity: ExecutionIdentity,
+    pub details: WorktreePreparedDetails,
+    pub evidence: Vec<AgentWorktreeEvidenceView>,
+    pub reviews: Vec<AgentWorktreeReviewView>,
+    pub conflict_checks: Vec<AgentWorktreeConflictView>,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RunConsumption {
@@ -335,6 +410,7 @@ pub struct AgentRunView {
     pub tool_calls: u64,
     pub artifacts: Vec<AgentArtifactView>,
     pub verifications: Vec<AgentVerificationView>,
+    pub worktree: Option<AgentWorktreeView>,
     pub final_artifact_ids: Vec<String>,
     pub failure: Option<FailureInfo>,
     pub recovery: RunRecovery,
@@ -573,6 +649,11 @@ fn build_action_event(
             route_decision_id,
         } => {
             let run = require_active_run(report, run_id)?;
+            if run.worktree.is_some() {
+                bail!(
+                    "runId '{run_id}' cannot start another attempt after worktree preparation; create a new Run or replan"
+                );
+            }
             ensure_budget_allows_attempt(run)?;
             if report
                 .runs
@@ -718,6 +799,169 @@ fn build_action_event(
                     })
                     .collect(),
             });
+            Ok(event)
+        }
+        AgentRunAction::RecordWorktreePrepared {
+            run_id,
+            attempt_id,
+            details,
+        } => {
+            let (run, attempt) = require_active_attempt(report, run_id, attempt_id)?;
+            if run.worktree.is_some() {
+                bail!("runId '{run_id}' already has a prepared worktree");
+            }
+            let mut event = attempt_event(
+                event_id,
+                timestamp_ms,
+                ObservabilityEventType::WorktreePrepared,
+                ObservabilityStatus::Succeeded,
+                run,
+                attempt,
+                None,
+            );
+            event.details.worktree = Some(details.clone());
+            event.safety.includes_local_paths = true;
+            Ok(event)
+        }
+        AgentRunAction::RecordWorktreeEvidence {
+            run_id,
+            attempt_id,
+            details,
+        } => {
+            let (run, attempt) = require_active_attempt(report, run_id, attempt_id)?;
+            let worktree = require_worktree(run)?;
+            if worktree.attempt_id != *attempt_id {
+                bail!("worktree evidence must come from its responsible attempt");
+            }
+            if worktree.details.base_commit != details.base_commit {
+                bail!("worktree evidence base commit differs from the prepared worktree");
+            }
+            if worktree
+                .evidence
+                .iter()
+                .any(|candidate| candidate.details.evidence_id == details.evidence_id)
+            {
+                bail!("evidenceId '{}' already exists", details.evidence_id);
+            }
+            let mut event = attempt_event(
+                event_id,
+                timestamp_ms,
+                ObservabilityEventType::WorktreeEvidenceRecorded,
+                ObservabilityStatus::Succeeded,
+                run,
+                attempt,
+                None,
+            );
+            event.details.worktree_evidence = Some(details.clone());
+            event.safety.includes_local_paths = true;
+            Ok(event)
+        }
+        AgentRunAction::RecordWorktreeReview {
+            run_id,
+            attempt_id,
+            identity,
+            details,
+        } => {
+            let run = require_active_run(report, run_id)?;
+            ensure_no_active_attempts(run)?;
+            require_attempt(run, attempt_id)?;
+            require_identity(identity)?;
+            let worktree = require_worktree(run)?;
+            if worktree.attempt_id != *attempt_id {
+                bail!("worktree review attemptId must match the responsible attempt");
+            }
+            require_independent_reviewer(worktree, identity)?;
+            if worktree
+                .reviews
+                .iter()
+                .any(|candidate| candidate.details.review_id == details.review_id)
+            {
+                bail!("reviewId '{}' already exists", details.review_id);
+            }
+            let evidence = worktree
+                .evidence
+                .iter()
+                .find(|candidate| candidate.details.evidence_id == details.evidence_id)
+                .with_context(|| {
+                    format!(
+                        "evidenceId '{}' was not found in run '{run_id}'",
+                        details.evidence_id
+                    )
+                })?;
+            if details.decision == WorktreeReviewDecision::Approved
+                && (!evidence.details.worktree_clean || !evidence.details.tests_succeeded)
+            {
+                bail!("review cannot approve dirty or failing worktree evidence");
+            }
+            let mut event = base_event(
+                event_id,
+                timestamp_ms,
+                ObservabilityEventType::WorktreeReviewRecorded,
+                ObservabilityStatus::Succeeded,
+                &run.task_id,
+                Some(run_id),
+                Some(attempt_id),
+            );
+            event.identity = identity.clone();
+            event.details.worktree_review = Some(details.clone());
+            Ok(event)
+        }
+        AgentRunAction::RecordWorktreeConflict {
+            run_id,
+            attempt_id,
+            identity,
+            details,
+        } => {
+            let run = require_active_run(report, run_id)?;
+            ensure_no_active_attempts(run)?;
+            require_attempt(run, attempt_id)?;
+            require_identity(identity)?;
+            let worktree = require_worktree(run)?;
+            if worktree.attempt_id != *attempt_id {
+                bail!("worktree conflict attemptId must match the responsible attempt");
+            }
+            require_independent_reviewer(worktree, identity)?;
+            if worktree
+                .conflict_checks
+                .iter()
+                .any(|candidate| candidate.details.check_id == details.check_id)
+            {
+                bail!("checkId '{}' already exists", details.check_id);
+            }
+            let evidence = worktree
+                .evidence
+                .iter()
+                .find(|candidate| candidate.details.evidence_id == details.evidence_id)
+                .with_context(|| {
+                    format!(
+                        "evidenceId '{}' was not found in run '{run_id}'",
+                        details.evidence_id
+                    )
+                })?;
+            if evidence.details.head_commit != details.head_commit {
+                bail!("conflict check HEAD differs from its worktree evidence");
+            }
+            if !worktree.reviews.iter().any(|review| {
+                review.details.evidence_id == details.evidence_id
+                    && review.details.decision == WorktreeReviewDecision::Approved
+            }) {
+                bail!("conflict check requires an approved independent review");
+            }
+            let mut event = base_event(
+                event_id,
+                timestamp_ms,
+                ObservabilityEventType::WorktreeConflictChecked,
+                if details.conflict_free {
+                    ObservabilityStatus::Succeeded
+                } else {
+                    ObservabilityStatus::Failed
+                },
+                &run.task_id,
+                Some(run_id),
+                Some(attempt_id),
+            );
+            event.identity = identity.clone();
+            event.details.worktree_conflict = Some(details.clone());
             Ok(event)
         }
         AgentRunAction::CompleteAttempt {
@@ -909,6 +1153,7 @@ fn build_action_event(
             {
                 bail!("runId '{run_id}' cannot complete without a successful attempt");
             }
+            ensure_worktree_completion_gate(run)?;
             for artifact in final_artifact_ids {
                 if !run
                     .artifacts
@@ -1097,6 +1342,7 @@ fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<Agen
                         tool_calls: 0,
                         artifacts: Vec::new(),
                         verifications: Vec::new(),
+                        worktree: None,
                         final_artifact_ids: Vec::new(),
                         failure: None,
                         recovery: default_recovery(),
@@ -1161,6 +1407,73 @@ fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<Agen
                     thread_ids: Vec::new(),
                     usage: UsageDelta::default(),
                     failure: None,
+                });
+            }
+            ObservabilityEventType::WorktreePrepared => {
+                let run = run_mut(&mut runs, run_id, event)?;
+                run.worktree = Some(AgentWorktreeView {
+                    attempt_id: event
+                        .trace
+                        .attempt_id
+                        .clone()
+                        .context("worktree_prepared is missing attemptId")?,
+                    prepared_at_ms: event.timestamp_ms,
+                    responsible_identity: event.identity.clone(),
+                    details: event
+                        .details
+                        .worktree
+                        .clone()
+                        .context("worktree_prepared is missing details")?,
+                    evidence: Vec::new(),
+                    reviews: Vec::new(),
+                    conflict_checks: Vec::new(),
+                });
+            }
+            ObservabilityEventType::WorktreeEvidenceRecorded => {
+                let run = run_mut(&mut runs, run_id, event)?;
+                let worktree = run
+                    .worktree
+                    .as_mut()
+                    .context("worktree evidence precedes worktree preparation")?;
+                worktree.evidence.push(AgentWorktreeEvidenceView {
+                    recorded_at_ms: event.timestamp_ms,
+                    details: event
+                        .details
+                        .worktree_evidence
+                        .clone()
+                        .context("worktree evidence is missing details")?,
+                });
+            }
+            ObservabilityEventType::WorktreeReviewRecorded => {
+                let run = run_mut(&mut runs, run_id, event)?;
+                let worktree = run
+                    .worktree
+                    .as_mut()
+                    .context("worktree review precedes worktree preparation")?;
+                worktree.reviews.push(AgentWorktreeReviewView {
+                    reviewed_at_ms: event.timestamp_ms,
+                    reviewer: event.identity.clone(),
+                    details: event
+                        .details
+                        .worktree_review
+                        .clone()
+                        .context("worktree review is missing details")?,
+                });
+            }
+            ObservabilityEventType::WorktreeConflictChecked => {
+                let run = run_mut(&mut runs, run_id, event)?;
+                let worktree = run
+                    .worktree
+                    .as_mut()
+                    .context("worktree conflict check precedes worktree preparation")?;
+                worktree.conflict_checks.push(AgentWorktreeConflictView {
+                    checked_at_ms: event.timestamp_ms,
+                    checker: event.identity.clone(),
+                    details: event
+                        .details
+                        .worktree_conflict
+                        .clone()
+                        .context("worktree conflict check is missing details")?,
                 });
             }
             ObservabilityEventType::ThreadLinked => {
@@ -1527,6 +1840,66 @@ fn require_identity(identity: &ExecutionIdentity) -> Result<()> {
     Ok(())
 }
 
+fn require_worktree(run: &AgentRunView) -> Result<&AgentWorktreeView> {
+    run.worktree
+        .as_ref()
+        .with_context(|| format!("runId '{}' has no prepared worktree", run.run_id))
+}
+
+fn require_independent_reviewer(
+    worktree: &AgentWorktreeView,
+    identity: &ExecutionIdentity,
+) -> Result<()> {
+    if identity.agent_role.as_deref() != Some("main_reviewer") {
+        bail!("review identity requires agentRole 'main_reviewer'");
+    }
+    if identity.home_id == worktree.responsible_identity.home_id {
+        bail!("reviewer Home must differ from the responsible Home");
+    }
+    Ok(())
+}
+
+fn ensure_worktree_completion_gate(run: &AgentRunView) -> Result<()> {
+    let Some(worktree) = &run.worktree else {
+        return Ok(());
+    };
+    let evidence = worktree
+        .evidence
+        .last()
+        .context("worktree run cannot complete without evidence")?;
+    if !evidence.details.worktree_clean {
+        bail!("worktree run cannot complete with uncommitted changes");
+    }
+    if !evidence.details.tests_succeeded {
+        bail!("worktree run cannot complete with failing test evidence");
+    }
+    let responsible_attempt = require_attempt(run, &worktree.attempt_id)?;
+    if responsible_attempt.status != AttemptLifecycleStatus::Succeeded {
+        bail!("worktree run requires its responsible attempt to succeed");
+    }
+    let approved = worktree.reviews.iter().rev().find(|review| {
+        review.details.evidence_id == evidence.details.evidence_id
+            && review.details.decision == WorktreeReviewDecision::Approved
+    });
+    if approved.is_none() {
+        bail!("worktree run requires independent approval of its latest evidence");
+    }
+    let conflict = worktree
+        .conflict_checks
+        .iter()
+        .rev()
+        .find(|check| check.details.evidence_id == evidence.details.evidence_id)
+        .context("worktree run requires a conflict check for its latest evidence")?;
+    if !conflict.details.conflict_free {
+        bail!("worktree run cannot complete while target-branch conflicts remain");
+    }
+    if conflict.details.head_commit != evidence.details.head_commit {
+        bail!("worktree conflict check is stale for the latest evidence");
+    }
+    crate::GitWorktreeManager::verify_current(&worktree.details, &evidence.details.head_commit)?;
+    Ok(())
+}
+
 fn ensure_no_active_attempts(run: &AgentRunView) -> Result<()> {
     if run
         .attempts
@@ -1664,6 +2037,24 @@ mod tests {
             model: Some(model.to_owned()),
             agent_role: Some("executor".to_owned()),
         }
+    }
+
+    fn test_git(repository: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(args)
+            .output()
+            .expect("git");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("git UTF-8")
+            .trim()
+            .to_owned()
     }
 
     fn route_decision(home: &str, model: &str) -> RouteDecision {
@@ -2079,5 +2470,232 @@ mod tests {
             .summary(&crate::ObservabilityFilter::default())
             .expect("observability summary");
         assert_eq!(summary.totals.route_decisions, 1);
+    }
+
+    #[test]
+    fn worktree_completion_requires_clean_evidence_independent_review_and_clear_conflicts() {
+        let temp = TempDir::new().expect("temp");
+        let store = AgentRunStore::new(temp.path().join("events.jsonl"));
+        let (_, run_id, attempt_id) = setup(&store);
+        let repository = temp.path().join("repository");
+        std::fs::create_dir_all(&repository).expect("repository");
+        test_git(&repository, &["init"]);
+        test_git(&repository, &["config", "user.name", "Agent Run Test"]);
+        test_git(
+            &repository,
+            &["config", "user.email", "agent-run@example.invalid"],
+        );
+        std::fs::write(repository.join("README.md"), "initial\n").expect("seed");
+        test_git(&repository, &["add", "README.md"]);
+        test_git(&repository, &["commit", "-m", "initial"]);
+        let plan = crate::GitWorktreeManager::plan(
+            &crate::WorktreeAssignment {
+                task_id: "task-1".to_owned(),
+                task_label: "Compile benchmark".to_owned(),
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                identity: identity("home-a", "gpt-a"),
+            },
+            &crate::WorktreePrepareOptions {
+                repository,
+                worktree_path: None,
+                base_ref: "HEAD".to_owned(),
+            },
+        )
+        .expect("plan");
+        crate::GitWorktreeManager::prepare(plan.clone()).expect("prepare");
+        store
+            .apply(AgentRunAction::RecordWorktreePrepared {
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                details: WorktreePreparedDetails {
+                    repository_root: plan.repository_root.clone(),
+                    worktree_path: plan.worktree_path.clone(),
+                    branch: plan.branch.clone(),
+                    base_ref: plan.base_ref.clone(),
+                    base_commit: plan.base_commit.clone(),
+                    head_commit: plan.base_commit.clone(),
+                },
+            })
+            .expect("prepare worktree");
+        let stale_attempt = store
+            .apply(AgentRunAction::StartAttempt {
+                run_id: run_id.clone(),
+                attempt_id: "attempt-stale".to_owned(),
+                identity: identity("home-b", "gpt-b"),
+                transition: AttemptTransition {
+                    kind: AttemptTransitionKind::Migration,
+                    from_attempt_id: Some(attempt_id.clone()),
+                },
+                route_reason: Some("attempt to reuse old worktree evidence".to_owned()),
+                route_decision_id: None,
+            })
+            .expect_err("worktree locks the responsible attempt");
+        assert!(stale_attempt
+            .to_string()
+            .contains("cannot start another attempt"));
+        let worktree_path = Path::new(&plan.worktree_path);
+        std::fs::write(worktree_path.join("feature.txt"), "implemented\n").expect("feature");
+        test_git(worktree_path, &["add", "feature.txt"]);
+        test_git(worktree_path, &["commit", "-m", "implement feature"]);
+        let head_commit = test_git(worktree_path, &["rev-parse", "HEAD"]);
+        let evidence_id = "evidence-1".to_owned();
+        store
+            .apply(AgentRunAction::RecordWorktreeEvidence {
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                details: WorktreeEvidenceDetails {
+                    evidence_id: evidence_id.clone(),
+                    base_commit: plan.base_commit.clone(),
+                    head_commit: head_commit.clone(),
+                    commit_count: 1,
+                    diff_sha256: "c".repeat(64),
+                    patch_path: temp.path().join("changes.patch").display().to_string(),
+                    patch_bytes: 128,
+                    changed_files: 1,
+                    insertions: 3,
+                    deletions: 1,
+                    worktree_clean: true,
+                    tests_succeeded: true,
+                    test_label: "focused tests".to_owned(),
+                    test_exit_code: 0,
+                    test_duration_ms: 42,
+                    test_output_sha256: "d".repeat(64),
+                    test_log_path: temp.path().join("test.log").display().to_string(),
+                },
+            })
+            .expect("record evidence");
+        store
+            .apply(AgentRunAction::CompleteAttempt {
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                thread_id: None,
+                usage: UsageDelta::default(),
+            })
+            .expect("complete attempt");
+
+        let no_review = store
+            .apply(AgentRunAction::CompleteRun {
+                run_id: run_id.clone(),
+                final_artifact_ids: Vec::new(),
+            })
+            .expect_err("review gate");
+        assert!(no_review.to_string().contains("independent approval"));
+
+        let mut same_home = identity("home-a", "reviewer-model");
+        same_home.agent_role = Some("main_reviewer".to_owned());
+        let self_review = store
+            .apply(AgentRunAction::RecordWorktreeReview {
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                identity: same_home,
+                details: WorktreeReviewDetails {
+                    review_id: "review-self".to_owned(),
+                    evidence_id: evidence_id.clone(),
+                    decision: WorktreeReviewDecision::Approved,
+                    reason: "self approval is forbidden".to_owned(),
+                },
+            })
+            .expect_err("self review");
+        assert!(self_review.to_string().contains("must differ"));
+
+        let mut reviewer = identity("home-review", "reviewer-model");
+        reviewer.agent_role = Some("main_reviewer".to_owned());
+        store
+            .apply(AgentRunAction::RecordWorktreeReview {
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                identity: reviewer.clone(),
+                details: WorktreeReviewDetails {
+                    review_id: "review-1".to_owned(),
+                    evidence_id: evidence_id.clone(),
+                    decision: WorktreeReviewDecision::Approved,
+                    reason: "tests and patch reviewed".to_owned(),
+                },
+            })
+            .expect("independent review");
+        let no_conflict_check = store
+            .apply(AgentRunAction::CompleteRun {
+                run_id: run_id.clone(),
+                final_artifact_ids: Vec::new(),
+            })
+            .expect_err("conflict gate");
+        assert!(no_conflict_check.to_string().contains("conflict check"));
+
+        store
+            .apply(AgentRunAction::RecordWorktreeConflict {
+                run_id: run_id.clone(),
+                attempt_id: attempt_id.clone(),
+                identity: reviewer.clone(),
+                details: WorktreeConflictDetails {
+                    check_id: "conflict-1".to_owned(),
+                    evidence_id: evidence_id.clone(),
+                    target_ref: "main".to_owned(),
+                    target_commit: plan.base_commit.clone(),
+                    head_commit: head_commit.clone(),
+                    conflict_free: false,
+                    disposition: crate::WorktreeConflictDisposition::HumanRequired,
+                    conflicting_paths_count: 1,
+                    conflicts_sha256: "f".repeat(64),
+                },
+            })
+            .expect("record conflict");
+        let unresolved = store
+            .apply(AgentRunAction::CompleteRun {
+                run_id: run_id.clone(),
+                final_artifact_ids: Vec::new(),
+            })
+            .expect_err("unresolved conflicts");
+        assert!(unresolved.to_string().contains("conflicts remain"));
+
+        store
+            .apply(AgentRunAction::RecordWorktreeConflict {
+                run_id: run_id.clone(),
+                attempt_id,
+                identity: reviewer,
+                details: WorktreeConflictDetails {
+                    check_id: "conflict-2".to_owned(),
+                    evidence_id,
+                    target_ref: "main".to_owned(),
+                    target_commit: plan.base_commit.clone(),
+                    head_commit,
+                    conflict_free: true,
+                    disposition: crate::WorktreeConflictDisposition::None,
+                    conflicting_paths_count: 0,
+                    conflicts_sha256: "0".repeat(64),
+                },
+            })
+            .expect("clear conflict");
+        std::fs::write(worktree_path.join("post-review.txt"), "not reviewed\n")
+            .expect("post-review change");
+        let changed_after_review = store
+            .apply(AgentRunAction::CompleteRun {
+                run_id: run_id.clone(),
+                final_artifact_ids: Vec::new(),
+            })
+            .expect_err("post-review changes must block completion");
+        assert!(changed_after_review
+            .to_string()
+            .contains("uncommitted changes"));
+        std::fs::remove_file(worktree_path.join("post-review.txt")).expect("remove change");
+        store
+            .apply(AgentRunAction::CompleteRun {
+                run_id: run_id.clone(),
+                final_artifact_ids: Vec::new(),
+            })
+            .expect("complete gated run");
+        let report = store.report().expect("report");
+        assert_eq!(
+            report.run(&run_id).expect("run").status,
+            RunLifecycleStatus::Succeeded
+        );
+        let summary = ObservabilityStore::new(store.path().to_path_buf())
+            .summary(&crate::ObservabilityFilter::default())
+            .expect("summary");
+        assert_eq!(summary.totals.worktrees_prepared, 1);
+        assert_eq!(summary.totals.worktree_evidence, 1);
+        assert_eq!(summary.totals.worktree_reviews, 1);
+        assert_eq!(summary.totals.worktree_conflict_checks, 2);
+        crate::GitWorktreeManager::rollback(&plan).expect("rollback");
     }
 }

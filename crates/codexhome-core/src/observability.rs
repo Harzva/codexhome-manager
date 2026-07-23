@@ -19,6 +19,10 @@ pub enum ObservabilityEventType {
     TaskCreated,
     RunStarted,
     AttemptStarted,
+    WorktreePrepared,
+    WorktreeEvidenceRecorded,
+    WorktreeReviewRecorded,
+    WorktreeConflictChecked,
     AttemptCompleted,
     AttemptFailed,
     ThreadLinked,
@@ -89,11 +93,87 @@ pub struct EventDetails {
     pub route_decision_id: Option<String>,
     pub routing: Option<RouteDecisionDetails>,
     pub transition: Option<AttemptTransition>,
+    pub worktree: Option<WorktreePreparedDetails>,
+    pub worktree_evidence: Option<WorktreeEvidenceDetails>,
+    pub worktree_review: Option<WorktreeReviewDetails>,
+    pub worktree_conflict: Option<WorktreeConflictDetails>,
     pub artifact_id: Option<String>,
     pub verification_id: Option<String>,
     pub target_artifact_id: Option<String>,
     #[serde(default)]
     pub final_artifact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreePreparedDetails {
+    pub repository_root: String,
+    pub worktree_path: String,
+    pub branch: String,
+    pub base_ref: String,
+    pub base_commit: String,
+    pub head_commit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreeEvidenceDetails {
+    pub evidence_id: String,
+    pub base_commit: String,
+    pub head_commit: String,
+    pub commit_count: u32,
+    pub diff_sha256: String,
+    pub patch_path: String,
+    pub patch_bytes: u64,
+    pub changed_files: u32,
+    pub insertions: u64,
+    pub deletions: u64,
+    pub worktree_clean: bool,
+    pub tests_succeeded: bool,
+    pub test_label: String,
+    pub test_exit_code: i32,
+    pub test_duration_ms: u64,
+    pub test_output_sha256: String,
+    pub test_log_path: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeReviewDecision {
+    Approved,
+    ChangesRequested,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreeReviewDetails {
+    pub review_id: String,
+    pub evidence_id: String,
+    pub decision: WorktreeReviewDecision,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeConflictDisposition {
+    None,
+    HumanRequired,
+    ReplanRequested,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorktreeConflictDetails {
+    pub check_id: String,
+    pub evidence_id: String,
+    pub target_ref: String,
+    pub target_commit: String,
+    pub head_commit: String,
+    pub conflict_free: bool,
+    pub disposition: WorktreeConflictDisposition,
+    pub conflicting_paths_count: u32,
+    pub conflicts_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -405,6 +485,10 @@ pub struct ObservabilityTotals {
     pub attempts: usize,
     pub threads: usize,
     pub route_decisions: u64,
+    pub worktrees_prepared: u64,
+    pub worktree_evidence: u64,
+    pub worktree_reviews: u64,
+    pub worktree_conflict_checks: u64,
     pub tool_calls: u64,
     pub artifacts: u64,
     pub verifications: u64,
@@ -637,7 +721,7 @@ pub fn parse_observability_events(input: &str) -> Result<Vec<ObservabilityEvent>
 
 pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
     let mut output = String::from(
-        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties,routing_required_security_domain,routing_locked_home,routing_locked_model,routing_max_estimated_cost_microusd,routing_allow_degraded,routing_selected_candidate_id,routing_score_basis_points,transition_kind,from_attempt_id,artifact_id,verification_id,target_artifact_id,final_artifact_ids\n",
+        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties,routing_required_security_domain,routing_locked_home,routing_locked_model,routing_max_estimated_cost_microusd,routing_allow_degraded,routing_selected_candidate_id,routing_score_basis_points,transition_kind,from_attempt_id,worktree_repository_root,worktree_path,worktree_branch,worktree_base_ref,worktree_base_commit,worktree_head_commit,evidence_id,evidence_commit_count,evidence_diff_sha256,evidence_patch_path,evidence_patch_bytes,evidence_changed_files,evidence_insertions,evidence_deletions,evidence_clean,evidence_tests_succeeded,evidence_test_label,evidence_test_exit_code,evidence_test_duration_ms,evidence_test_output_sha256,evidence_test_log_path,review_id,review_evidence_id,review_decision,review_reason,conflict_check_id,conflict_evidence_id,conflict_target_ref,conflict_target_commit,conflict_head_commit,conflict_free,conflict_disposition,conflicting_paths_count,conflicts_sha256,artifact_id,verification_id,target_artifact_id,final_artifact_ids\n",
     );
     for event in events {
         let fields = [
@@ -830,6 +914,210 @@ pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
                 .as_ref()
                 .and_then(|transition| transition.from_attempt_id.clone())
                 .unwrap_or_default(),
+            event
+                .details
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.repository_root.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.worktree_path.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.branch.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.base_ref.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.base_commit.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.head_commit.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.evidence_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.commit_count.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.diff_sha256.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.patch_path.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.patch_bytes.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.changed_files.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.insertions.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.deletions.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.worktree_clean.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.tests_succeeded.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.test_label.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.test_exit_code.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.test_duration_ms.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.test_output_sha256.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .map(|evidence| evidence.test_log_path.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_review
+                .as_ref()
+                .map(|review| review.review_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_review
+                .as_ref()
+                .map(|review| review.evidence_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_review
+                .as_ref()
+                .map(|review| json_name(&review.decision))
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_review
+                .as_ref()
+                .map(|review| review.reason.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.check_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.evidence_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.target_ref.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.target_commit.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.head_commit.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.conflict_free.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| json_name(&conflict.disposition))
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.conflicting_paths_count.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .map(|conflict| conflict.conflicts_sha256.clone())
+                .unwrap_or_default(),
             option(&event.details.artifact_id),
             option(&event.details.verification_id),
             option(&event.details.target_artifact_id),
@@ -922,6 +1210,26 @@ impl Accumulator {
             ObservabilityEventType::RouteDecided => {
                 checked_add(&mut self.totals.route_decisions, 1, "route decision count")?
             }
+            ObservabilityEventType::WorktreePrepared => checked_add(
+                &mut self.totals.worktrees_prepared,
+                1,
+                "prepared worktree count",
+            )?,
+            ObservabilityEventType::WorktreeEvidenceRecorded => checked_add(
+                &mut self.totals.worktree_evidence,
+                1,
+                "worktree evidence count",
+            )?,
+            ObservabilityEventType::WorktreeReviewRecorded => checked_add(
+                &mut self.totals.worktree_reviews,
+                1,
+                "worktree review count",
+            )?,
+            ObservabilityEventType::WorktreeConflictChecked => checked_add(
+                &mut self.totals.worktree_conflict_checks,
+                1,
+                "worktree conflict check count",
+            )?,
             ObservabilityEventType::ToolCallCompleted => {
                 checked_add(&mut self.totals.tool_calls, 1, "tool call count")?
             }
@@ -1029,6 +1337,10 @@ struct TraceIndexes {
     artifacts: BTreeMap<String, (String, String, String)>,
     verifications: BTreeSet<String>,
     route_decisions: BTreeMap<String, (String, String, ExecutionIdentity)>,
+    worktrees: BTreeMap<String, (String, String, String, ExecutionIdentity)>,
+    worktree_evidence: BTreeMap<String, (String, String, String, String)>,
+    worktree_reviews: BTreeSet<String>,
+    worktree_conflict_checks: BTreeSet<String>,
     last_timestamp_by_run: BTreeMap<String, u64>,
 }
 
@@ -1194,6 +1506,147 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
                 );
             }
         }
+        ObservabilityEventType::WorktreePrepared => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let attempt = verify_attempt_link(event, indexes, task, run)?;
+            if indexes.worktrees.contains_key(run) {
+                bail!("runId '{}' already has a prepared worktree", run);
+            }
+            indexes.worktrees.insert(
+                run.to_owned(),
+                (
+                    task.to_owned(),
+                    run.to_owned(),
+                    attempt.to_owned(),
+                    event.identity.clone(),
+                ),
+            );
+        }
+        ObservabilityEventType::WorktreeEvidenceRecorded => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let attempt = verify_attempt_link(event, indexes, task, run)?;
+            let worktree = indexes.worktrees.get(run).with_context(|| {
+                format!(
+                    "event {} records evidence before a worktree is prepared",
+                    event.event_id
+                )
+            })?;
+            if worktree.2 != attempt {
+                bail!(
+                    "event {} records evidence from a different attempt",
+                    event.event_id
+                );
+            }
+            if event.identity != worktree.3 {
+                bail!(
+                    "event {} evidence identity differs from the responsible identity",
+                    event.event_id
+                );
+            }
+            let evidence = event
+                .details
+                .worktree_evidence
+                .as_ref()
+                .context("worktree_evidence_recorded is missing details")?;
+            if indexes
+                .worktree_evidence
+                .insert(
+                    evidence.evidence_id.clone(),
+                    (
+                        task.to_owned(),
+                        run.to_owned(),
+                        attempt.to_owned(),
+                        evidence.head_commit.clone(),
+                    ),
+                )
+                .is_some()
+            {
+                bail!(
+                    "worktree evidenceId '{}' is recorded more than once",
+                    evidence.evidence_id
+                );
+            }
+        }
+        ObservabilityEventType::WorktreeReviewRecorded => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            verify_attempt_link(event, indexes, task, run)?;
+            let review = event
+                .details
+                .worktree_review
+                .as_ref()
+                .context("worktree_review_recorded is missing details")?;
+            let evidence = indexes
+                .worktree_evidence
+                .get(&review.evidence_id)
+                .with_context(|| {
+                    format!(
+                        "event {} references unknown evidenceId '{}'",
+                        event.event_id, review.evidence_id
+                    )
+                })?;
+            if evidence.0 != task || evidence.1 != run {
+                bail!(
+                    "event {} evidence belongs to another task/run",
+                    event.event_id
+                );
+            }
+            let responsible = &indexes
+                .worktrees
+                .get(run)
+                .context("reviewed run has no prepared worktree")?
+                .3;
+            if event.identity.home_id == responsible.home_id {
+                bail!(
+                    "event {} reviewer Home must differ from the responsible Home",
+                    event.event_id
+                );
+            }
+            if event.identity.agent_role.as_deref() != Some("main_reviewer") {
+                bail!(
+                    "event {} reviewer identity must use agentRole 'main_reviewer'",
+                    event.event_id
+                );
+            }
+            if !indexes.worktree_reviews.insert(review.review_id.clone()) {
+                bail!(
+                    "worktree reviewId '{}' is recorded more than once",
+                    review.review_id
+                );
+            }
+        }
+        ObservabilityEventType::WorktreeConflictChecked => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            verify_attempt_link(event, indexes, task, run)?;
+            let conflict = event
+                .details
+                .worktree_conflict
+                .as_ref()
+                .context("worktree_conflict_checked is missing details")?;
+            let evidence = indexes
+                .worktree_evidence
+                .get(&conflict.evidence_id)
+                .with_context(|| {
+                    format!(
+                        "event {} references unknown evidenceId '{}'",
+                        event.event_id, conflict.evidence_id
+                    )
+                })?;
+            if evidence.0 != task || evidence.1 != run || evidence.3 != conflict.head_commit {
+                bail!(
+                    "event {} conflict check does not match its evidence",
+                    event.event_id
+                );
+            }
+            if !indexes
+                .worktree_conflict_checks
+                .insert(conflict.check_id.clone())
+            {
+                bail!(
+                    "worktree checkId '{}' is recorded more than once",
+                    conflict.check_id
+                );
+            }
+        }
         ObservabilityEventType::AttemptCompleted
         | ObservabilityEventType::AttemptFailed
         | ObservabilityEventType::ToolCallCompleted
@@ -1347,6 +1800,29 @@ fn verify_run_link<'a>(
         );
     }
     Ok((task, run))
+}
+
+fn verify_attempt_link<'a>(
+    event: &'a ObservabilityEvent,
+    indexes: &'a TraceIndexes,
+    task: &str,
+    run: &str,
+) -> Result<&'a str> {
+    let attempt = required("attemptId", event.trace.attempt_id.as_deref())?;
+    let expected = indexes.attempts.get(attempt).with_context(|| {
+        format!(
+            "event {} references unknown attemptId '{}'",
+            event.event_id, attempt
+        )
+    })?;
+    if expected != &(task.to_owned(), run.to_owned()) {
+        bail!(
+            "event {} attemptId '{}' belongs to another task/run",
+            event.event_id,
+            attempt
+        );
+    }
+    Ok(attempt)
 }
 
 fn verify_optional_thread(
@@ -1616,6 +2092,113 @@ fn validate_event_details(event: &ObservabilityEvent) -> Result<()> {
             validate_identifier("details.transition.fromAttemptId", source)?;
         }
     }
+    if let Some(worktree) = &details.worktree {
+        if event.event_type != ObservabilityEventType::WorktreePrepared {
+            bail!(
+                "event {} worktree details require worktree_prepared",
+                event.event_id
+            );
+        }
+        validate_local_path("details.worktree.repositoryRoot", &worktree.repository_root)?;
+        validate_local_path("details.worktree.worktreePath", &worktree.worktree_path)?;
+        validate_label("details.worktree.branch", &worktree.branch)?;
+        validate_label("details.worktree.baseRef", &worktree.base_ref)?;
+        validate_git_commit("details.worktree.baseCommit", &worktree.base_commit)?;
+        validate_git_commit("details.worktree.headCommit", &worktree.head_commit)?;
+        if worktree.base_commit != worktree.head_commit {
+            bail!(
+                "event {} prepared worktree must begin at its base commit",
+                event.event_id
+            );
+        }
+    }
+    if let Some(evidence) = &details.worktree_evidence {
+        if event.event_type != ObservabilityEventType::WorktreeEvidenceRecorded {
+            bail!(
+                "event {} worktreeEvidence requires worktree_evidence_recorded",
+                event.event_id
+            );
+        }
+        validate_identifier("details.worktreeEvidence.evidenceId", &evidence.evidence_id)?;
+        validate_git_commit("details.worktreeEvidence.baseCommit", &evidence.base_commit)?;
+        validate_git_commit("details.worktreeEvidence.headCommit", &evidence.head_commit)?;
+        validate_sha256("details.worktreeEvidence.diffSha256", &evidence.diff_sha256)?;
+        validate_local_path("details.worktreeEvidence.patchPath", &evidence.patch_path)?;
+        validate_label("details.worktreeEvidence.testLabel", &evidence.test_label)?;
+        validate_sha256(
+            "details.worktreeEvidence.testOutputSha256",
+            &evidence.test_output_sha256,
+        )?;
+        validate_local_path(
+            "details.worktreeEvidence.testLogPath",
+            &evidence.test_log_path,
+        )?;
+        if evidence.commit_count == 0 || evidence.base_commit == evidence.head_commit {
+            bail!(
+                "event {} worktree evidence requires at least one commit",
+                event.event_id
+            );
+        }
+        if evidence.patch_bytes == 0 || evidence.changed_files == 0 {
+            bail!(
+                "event {} worktree evidence requires a non-empty patch",
+                event.event_id
+            );
+        }
+        if evidence.tests_succeeded != (evidence.test_exit_code == 0) {
+            bail!(
+                "event {} test success and exit code disagree",
+                event.event_id
+            );
+        }
+    }
+    if let Some(review) = &details.worktree_review {
+        if event.event_type != ObservabilityEventType::WorktreeReviewRecorded {
+            bail!(
+                "event {} worktreeReview requires worktree_review_recorded",
+                event.event_id
+            );
+        }
+        validate_identifier("details.worktreeReview.reviewId", &review.review_id)?;
+        validate_identifier("details.worktreeReview.evidenceId", &review.evidence_id)?;
+        validate_long_text("details.worktreeReview.reason", &review.reason, false)?;
+    }
+    if let Some(conflict) = &details.worktree_conflict {
+        if event.event_type != ObservabilityEventType::WorktreeConflictChecked {
+            bail!(
+                "event {} worktreeConflict requires worktree_conflict_checked",
+                event.event_id
+            );
+        }
+        validate_identifier("details.worktreeConflict.checkId", &conflict.check_id)?;
+        validate_identifier("details.worktreeConflict.evidenceId", &conflict.evidence_id)?;
+        validate_label("details.worktreeConflict.targetRef", &conflict.target_ref)?;
+        validate_git_commit(
+            "details.worktreeConflict.targetCommit",
+            &conflict.target_commit,
+        )?;
+        validate_git_commit("details.worktreeConflict.headCommit", &conflict.head_commit)?;
+        validate_sha256(
+            "details.worktreeConflict.conflictsSha256",
+            &conflict.conflicts_sha256,
+        )?;
+        let disposition_matches = if conflict.conflict_free {
+            conflict.disposition == WorktreeConflictDisposition::None
+                && conflict.conflicting_paths_count == 0
+        } else {
+            matches!(
+                conflict.disposition,
+                WorktreeConflictDisposition::HumanRequired
+                    | WorktreeConflictDisposition::ReplanRequested
+            ) && conflict.conflicting_paths_count > 0
+        };
+        if !disposition_matches {
+            bail!(
+                "event {} conflict state and disposition disagree",
+                event.event_id
+            );
+        }
+    }
     for (name, value, expected_type) in [
         (
             "details.artifactId",
@@ -1838,6 +2421,10 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
     if matches!(
         event.event_type,
         Type::AttemptStarted
+            | Type::WorktreePrepared
+            | Type::WorktreeEvidenceRecorded
+            | Type::WorktreeReviewRecorded
+            | Type::WorktreeConflictChecked
             | Type::AttemptCompleted
             | Type::AttemptFailed
             | Type::ToolCallCompleted
@@ -1861,6 +2448,32 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
                 "event {} route decision must use succeeded or failed status",
                 event.event_id
             );
+        }
+    }
+    for (event_type, present, name) in [
+        (
+            Type::WorktreePrepared,
+            event.details.worktree.is_some(),
+            "worktree",
+        ),
+        (
+            Type::WorktreeEvidenceRecorded,
+            event.details.worktree_evidence.is_some(),
+            "worktreeEvidence",
+        ),
+        (
+            Type::WorktreeReviewRecorded,
+            event.details.worktree_review.is_some(),
+            "worktreeReview",
+        ),
+        (
+            Type::WorktreeConflictChecked,
+            event.details.worktree_conflict.is_some(),
+            "worktreeConflict",
+        ),
+    ] {
+        if event.event_type == event_type && !present {
+            bail!("event {} requires {name} details", event.event_id);
         }
     }
     if event.event_type == Type::ToolCallCompleted {
@@ -2006,6 +2619,47 @@ fn validate_label(name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_long_text(name: &str, value: &str, allow_local_path: bool) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 2_048
+        || contains_obvious_secret(trimmed)
+        || (!allow_local_path && contains_obvious_local_path(trimmed))
+    {
+        bail!("{name} is invalid");
+    }
+    Ok(())
+}
+
+fn validate_local_path(name: &str, value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 4_096
+        || !contains_obvious_local_path(trimmed)
+        || contains_obvious_secret(trimmed)
+        || trimmed
+            .chars()
+            .any(|character| matches!(character, '\r' | '\n'))
+    {
+        bail!("{name} is not a safe absolute local path");
+    }
+    Ok(())
+}
+
+fn validate_git_commit(name: &str, value: &str) -> Result<()> {
+    if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("{name} must be a full 40-character hexadecimal Git commit");
+    }
+    Ok(())
+}
+
+fn validate_sha256(name: &str, value: &str) -> Result<()> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("{name} must be a 64-character hexadecimal SHA-256");
+    }
+    Ok(())
+}
+
 fn validate_route_texts(event: &ObservabilityEvent, name: &str, values: &[String]) -> Result<()> {
     if values.len() > 64 {
         bail!("event {} {name} has too many entries", event.event_id);
@@ -2082,6 +2736,26 @@ fn event_text_values(event: &ObservabilityEvent) -> impl Iterator<Item = &str> {
             .transition
             .as_ref()
             .and_then(|transition| transition.from_attempt_id.as_deref()),
+        event
+            .details
+            .worktree
+            .as_ref()
+            .map(|worktree| worktree.repository_root.as_str()),
+        event
+            .details
+            .worktree
+            .as_ref()
+            .map(|worktree| worktree.worktree_path.as_str()),
+        event
+            .details
+            .worktree_evidence
+            .as_ref()
+            .map(|evidence| evidence.patch_path.as_str()),
+        event
+            .details
+            .worktree_evidence
+            .as_ref()
+            .map(|evidence| evidence.test_log_path.as_str()),
         event.details.artifact_id.as_deref(),
         event.details.verification_id.as_deref(),
         event.details.target_artifact_id.as_deref(),

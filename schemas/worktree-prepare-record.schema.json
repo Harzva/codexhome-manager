@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/worktree-prepare-record.schema.json",
+  "title": "CodexHome Worktree Prepare Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "prepared", "eventId", "run", "safety"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.worktree-prepare-record.v1" },
+    "prepared": { "$ref": "#/$defs/prepared" },
+    "eventId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "run": { "$ref": "agent-runs.schema.json#/$defs/run" },
+    "safety": { "$ref": "worktree-plan.schema.json#/$defs/safety" }
+  },
+  "$defs": {
+    "prepared": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ok",
+        "schemaVersion",
+        "created",
+        "headCommit",
+        "plan",
+        "safety"
+      ],
+      "properties": {
+        "ok": { "const": true },
+        "schemaVersion": { "const": "codexhome.worktree-prepare.v1" },
+        "created": { "const": true },
+        "headCommit": {
+          "$ref": "observability-event.schema.json#/$defs/gitCommit"
+        },
+        "plan": { "$ref": "worktree-plan.schema.json" },
+        "safety": { "$ref": "worktree-plan.schema.json#/$defs/safety" }
+      }
+    }
+  }
+}

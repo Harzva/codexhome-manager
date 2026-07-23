@@ -11,13 +11,15 @@ mod home;
 mod observability;
 mod registry;
 mod router;
+mod worktree;
 
 pub use agent_runs::{
     generate_id, AgentArtifactView, AgentAttemptView, AgentRouteDecisionView, AgentRunAction,
     AgentRunMutationReport, AgentRunReport, AgentRunStore, AgentRunView, AgentTaskView,
-    AgentVerificationView, AttemptLifecycleStatus, RunBudgetState, RunConsumption,
-    RunLifecycleStatus, RunRecovery, TaskLifecycleStatus, AGENT_RUN_MUTATION_SCHEMA_VERSION,
-    AGENT_RUN_REPORT_SCHEMA_VERSION,
+    AgentVerificationView, AgentWorktreeConflictView, AgentWorktreeEvidenceView,
+    AgentWorktreeReviewView, AgentWorktreeView, AttemptLifecycleStatus, RunBudgetState,
+    RunConsumption, RunLifecycleStatus, RunRecovery, TaskLifecycleStatus,
+    AGENT_RUN_MUTATION_SCHEMA_VERSION, AGENT_RUN_REPORT_SCHEMA_VERSION,
 };
 pub use home::{CopySummary, HomeManager, HomeMutationResult};
 pub use observability::{
@@ -27,9 +29,10 @@ pub use observability::{
     ObservabilityFilter, ObservabilityGroup, ObservabilityStatus, ObservabilityStore,
     ObservabilitySummary, ObservabilityTotals, ObservabilityVerifyReport,
     RouteCandidateDecisionSnapshot, RouteDecisionDetails, RouteScoreSnapshot, RunBudget,
-    TaskDescriptor, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
-    OBSERVABILITY_EXPORT_SCHEMA_VERSION, OBSERVABILITY_SUMMARY_SCHEMA_VERSION,
-    OBSERVABILITY_VERIFY_SCHEMA_VERSION,
+    TaskDescriptor, TraceContext, UsageDelta, WorktreeConflictDetails, WorktreeConflictDisposition,
+    WorktreeEvidenceDetails, WorktreePreparedDetails, WorktreeReviewDecision,
+    WorktreeReviewDetails, OBSERVABILITY_EVENT_SCHEMA_VERSION, OBSERVABILITY_EXPORT_SCHEMA_VERSION,
+    OBSERVABILITY_SUMMARY_SCHEMA_VERSION, OBSERVABILITY_VERIFY_SCHEMA_VERSION,
 };
 pub use registry::{
     normalize_alias, normalize_specialties, RegisteredHomeView, Registry, RegistryEntry,
@@ -41,6 +44,12 @@ pub use router::{
     RouteRequest, RouteScoreComponent, RouteScoreWeights, RouteSelection, RouteTaskKind,
     RouteTaskRule, ROUTE_DECISION_SCHEMA_VERSION, ROUTE_POLICY_SCHEMA_VERSION,
     ROUTE_REQUEST_SCHEMA_VERSION,
+};
+pub use worktree::{
+    GitWorktreeManager, WorktreeAssignment, WorktreeConflictOptions, WorktreeConflictReport,
+    WorktreeEvidenceOptions, WorktreeEvidenceReport, WorktreePlan, WorktreePrepareOptions,
+    WorktreePrepareReport, WORKTREE_CONFLICT_SCHEMA_VERSION, WORKTREE_EVIDENCE_SCHEMA_VERSION,
+    WORKTREE_PLAN_SCHEMA_VERSION, WORKTREE_PREPARE_SCHEMA_VERSION,
 };
 
 pub const DISCOVERY_SCHEMA_VERSION: &str = "codexhome.discovery.v1";

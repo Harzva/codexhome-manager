@@ -63,6 +63,7 @@
         "toolCalls",
         "artifacts",
         "verifications",
+        "worktree",
         "finalArtifactIds",
         "failure",
         "recovery"
@@ -103,6 +104,12 @@
         "verifications": {
           "type": "array",
           "items": { "$ref": "#/$defs/verification" }
+        },
+        "worktree": {
+          "oneOf": [
+            { "$ref": "#/$defs/worktree" },
+            { "type": "null" }
+          ]
         },
         "finalArtifactIds": {
           "type": "array",
@@ -267,6 +274,82 @@
         "succeeded": { "type": "boolean" },
         "durationMs": { "type": "integer", "minimum": 0 },
         "completedAtMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "worktree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptId",
+        "preparedAtMs",
+        "responsibleIdentity",
+        "details",
+        "evidence",
+        "reviews",
+        "conflictChecks"
+      ],
+      "properties": {
+        "attemptId": {
+          "$ref": "observability-event.schema.json#/$defs/identifier"
+        },
+        "preparedAtMs": { "type": "integer", "minimum": 0 },
+        "responsibleIdentity": {
+          "$ref": "observability-event.schema.json#/$defs/identity"
+        },
+        "details": {
+          "$ref": "observability-event.schema.json#/$defs/worktreePrepared"
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/worktreeEvidenceView" }
+        },
+        "reviews": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/worktreeReviewView" }
+        },
+        "conflictChecks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/worktreeConflictView" }
+        }
+      }
+    },
+    "worktreeEvidenceView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recordedAtMs", "details"],
+      "properties": {
+        "recordedAtMs": { "type": "integer", "minimum": 0 },
+        "details": {
+          "$ref": "observability-event.schema.json#/$defs/worktreeEvidence"
+        }
+      }
+    },
+    "worktreeReviewView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewedAtMs", "reviewer", "details"],
+      "properties": {
+        "reviewedAtMs": { "type": "integer", "minimum": 0 },
+        "reviewer": {
+          "$ref": "observability-event.schema.json#/$defs/identity"
+        },
+        "details": {
+          "$ref": "observability-event.schema.json#/$defs/worktreeReview"
+        }
+      }
+    },
+    "worktreeConflictView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkedAtMs", "checker", "details"],
+      "properties": {
+        "checkedAtMs": { "type": "integer", "minimum": 0 },
+        "checker": {
+          "$ref": "observability-event.schema.json#/$defs/identity"
+        },
+        "details": {
+          "$ref": "observability-event.schema.json#/$defs/worktreeConflict"
+        }
       }
     },
     "consumption": {

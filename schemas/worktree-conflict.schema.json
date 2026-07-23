@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/worktree-conflict.schema.json",
+  "title": "CodexHome Worktree Conflict Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "details", "safety"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.worktree-conflict.v1" },
+    "details": {
+      "$ref": "observability-event.schema.json#/$defs/worktreeConflict"
+    },
+    "safety": { "$ref": "worktree-plan.schema.json#/$defs/safety" }
+  }
+}

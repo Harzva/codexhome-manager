@@ -23,6 +23,10 @@
         "task_created",
         "run_started",
         "attempt_started",
+        "worktree_prepared",
+        "worktree_evidence_recorded",
+        "worktree_review_recorded",
+        "worktree_conflict_checked",
         "attempt_completed",
         "attempt_failed",
         "thread_linked",
@@ -207,6 +211,30 @@
             { "type": "null" }
           ]
         },
+        "worktree": {
+          "oneOf": [
+            { "$ref": "#/$defs/worktreePrepared" },
+            { "type": "null" }
+          ]
+        },
+        "worktreeEvidence": {
+          "oneOf": [
+            { "$ref": "#/$defs/worktreeEvidence" },
+            { "type": "null" }
+          ]
+        },
+        "worktreeReview": {
+          "oneOf": [
+            { "$ref": "#/$defs/worktreeReview" },
+            { "type": "null" }
+          ]
+        },
+        "worktreeConflict": {
+          "oneOf": [
+            { "$ref": "#/$defs/worktreeConflict" },
+            { "type": "null" }
+          ]
+        },
         "artifactId": { "$ref": "#/$defs/nullableIdentifier" },
         "verificationId": { "$ref": "#/$defs/nullableIdentifier" },
         "targetArtifactId": { "$ref": "#/$defs/nullableIdentifier" },
@@ -261,6 +289,122 @@
       "properties": {
         "kind": { "enum": ["initial", "retry", "migration"] },
         "fromAttemptId": { "$ref": "#/$defs/nullableIdentifier" }
+      }
+    },
+    "localPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "worktreePrepared": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repositoryRoot",
+        "worktreePath",
+        "branch",
+        "baseRef",
+        "baseCommit",
+        "headCommit"
+      ],
+      "properties": {
+        "repositoryRoot": { "$ref": "#/$defs/localPath" },
+        "worktreePath": { "$ref": "#/$defs/localPath" },
+        "branch": { "$ref": "#/$defs/label" },
+        "baseRef": { "$ref": "#/$defs/label" },
+        "baseCommit": { "$ref": "#/$defs/gitCommit" },
+        "headCommit": { "$ref": "#/$defs/gitCommit" }
+      }
+    },
+    "worktreeEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "baseCommit",
+        "headCommit",
+        "commitCount",
+        "diffSha256",
+        "patchPath",
+        "patchBytes",
+        "changedFiles",
+        "insertions",
+        "deletions",
+        "worktreeClean",
+        "testsSucceeded",
+        "testLabel",
+        "testExitCode",
+        "testDurationMs",
+        "testOutputSha256",
+        "testLogPath"
+      ],
+      "properties": {
+        "evidenceId": { "$ref": "#/$defs/identifier" },
+        "baseCommit": { "$ref": "#/$defs/gitCommit" },
+        "headCommit": { "$ref": "#/$defs/gitCommit" },
+        "commitCount": { "type": "integer", "minimum": 1 },
+        "diffSha256": { "$ref": "#/$defs/sha256" },
+        "patchPath": { "$ref": "#/$defs/localPath" },
+        "patchBytes": { "type": "integer", "minimum": 1 },
+        "changedFiles": { "type": "integer", "minimum": 1 },
+        "insertions": { "type": "integer", "minimum": 0 },
+        "deletions": { "type": "integer", "minimum": 0 },
+        "worktreeClean": { "type": "boolean" },
+        "testsSucceeded": { "type": "boolean" },
+        "testLabel": { "$ref": "#/$defs/label" },
+        "testExitCode": { "type": "integer" },
+        "testDurationMs": { "type": "integer", "minimum": 0 },
+        "testOutputSha256": { "$ref": "#/$defs/sha256" },
+        "testLogPath": { "$ref": "#/$defs/localPath" }
+      }
+    },
+    "worktreeReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewId", "evidenceId", "decision", "reason"],
+      "properties": {
+        "reviewId": { "$ref": "#/$defs/identifier" },
+        "evidenceId": { "$ref": "#/$defs/identifier" },
+        "decision": {
+          "enum": ["approved", "changes_requested", "rejected"]
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
+      }
+    },
+    "worktreeConflict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkId",
+        "evidenceId",
+        "targetRef",
+        "targetCommit",
+        "headCommit",
+        "conflictFree",
+        "disposition",
+        "conflictingPathsCount",
+        "conflictsSha256"
+      ],
+      "properties": {
+        "checkId": { "$ref": "#/$defs/identifier" },
+        "evidenceId": { "$ref": "#/$defs/identifier" },
+        "targetRef": { "$ref": "#/$defs/label" },
+        "targetCommit": { "$ref": "#/$defs/gitCommit" },
+        "headCommit": { "$ref": "#/$defs/gitCommit" },
+        "conflictFree": { "type": "boolean" },
+        "disposition": {
+          "enum": ["none", "human_required", "replan_requested"]
+        },
+        "conflictingPathsCount": { "type": "integer", "minimum": 0 },
+        "conflictsSha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "routeDecisionDetails": {

@@ -11,6 +11,7 @@ Task
       -> Tool calls
       -> Artifacts
       -> Verification
+      -> Worktree evidence, independent review, conflict check
 ```
 
 All state is projected from the same append-only event stream used by observability. There is no second mutable Run database. One file lock protects lifecycle validation and append, so a concurrent command cannot complete the same Attempt or Run twice.
@@ -89,13 +90,74 @@ codexhome run complete <run-id> --final-artifact-id patch-1
 
 `codexhome run show <run-id> --json` reports total and failed-attempt token, duration, and cost separately. It also returns budget exhaustion, whether retry or migration is allowed, and a deterministic recovery recommendation.
 
+## Worktree orchestration
+
+One active Attempt can receive one isolated Git worktree. The generated branch
+uses the `codex/` prefix plus a bounded task slug and Run-derived hash. The
+default worktree path is outside the repository, under a sibling
+`.codexhome-worktrees` directory. Existing branches and paths are rejected,
+and custom worktree/evidence paths must remain outside both source and worktree.
+
+```bash
+codexhome run worktree prepare <run-id> <attempt-id> \
+  --repository /absolute/path/to/repository \
+  --base-ref main \
+  --dry-run
+
+codexhome run worktree prepare <run-id> <attempt-id> \
+  --repository /absolute/path/to/repository \
+  --base-ref main
+```
+
+After the responsible Home commits its change, collect a real Git patch and run
+one test command without a shell:
+
+```bash
+codexhome run worktree evidence <run-id> <attempt-id> \
+  --evidence-id evidence-1 \
+  --test-label "workspace tests" \
+  --test-program cargo -- test --workspace
+```
+
+The evidence records base/HEAD commits, commit count, patch and test-log
+SHA-256, changed-file and line statistics, exit code, duration, and clean-tree
+state. Patch and test log are owner-only local sidecars; prompts, model
+responses, raw tool arguments, and test command arguments are not appended to
+the event stream.
+
+Complete the Attempt, then use a different Home as the main reviewer:
+
+```bash
+codexhome run attempt complete <run-id> <attempt-id> \
+  --input-tokens 1000 --output-tokens 200 \
+  --duration-ms 30000 --estimated-cost-microusd 500
+
+codexhome run worktree review <run-id> <attempt-id> evidence-1 \
+  --decision approved \
+  --reason "patch and tests reviewed" \
+  --home-id home-main-reviewer \
+  --model reviewer-model
+
+codexhome run worktree conflict-check <run-id> <attempt-id> evidence-1 \
+  --target-ref main \
+  --on-conflict human \
+  --home-id home-main-reviewer \
+  --model reviewer-model
+```
+
+`run complete` rejects a worktree Run unless its latest evidence is clean and
+tested, an independent `main_reviewer` approved that same evidence, and the
+same HEAD passed the latest target-ref conflict check. A conflict is never
+merged automatically: it is recorded as `human_required` or
+`replan_requested`.
+
 ## Budget behavior
 
 Token, duration, cost, and Attempt limits are checked before another Attempt starts. A terminal Attempt is always recorded even when its actual usage exceeds the budget; otherwise the cost ledger would hide overspend. Afterward the Run recommends `pause` and rejects retry/migration until a later policy layer explicitly creates a new Run.
 
 ## Safety
 
-Task labels, task kinds, route reasons, failure reasons, and identity labels are length-bounded and checked for obvious credential patterns. The contract stores no task prompt, response, raw tool arguments, credentials, environment dump, local artifact path, or arbitrary JSON payload.
+Task labels, task kinds, route reasons, review reasons, failure reasons, and identity labels are length-bounded and checked for obvious credential patterns. The general artifact contract stores no task prompt, response, raw tool arguments, credentials, environment dump, artifact payload, or arbitrary JSON payload. Worktree events deliberately include local repository, worktree, patch, and test-log paths and set `includesLocalPaths` to true; review before sharing exported events.
 
 Canonical JSON Schemas:
 
@@ -105,3 +167,9 @@ Canonical JSON Schemas:
 - [Agent Run detail](../schemas/agent-run.schema.json)
 - [Agent Run mutation](../schemas/agent-run-mutation.schema.json)
 - [Route decision](../schemas/route-decision.schema.json)
+- [Worktree plan](../schemas/worktree-plan.schema.json)
+- [Worktree evidence](../schemas/worktree-evidence.schema.json)
+- [Worktree conflict check](../schemas/worktree-conflict.schema.json)
+- [Worktree prepare record](../schemas/worktree-prepare-record.schema.json)
+- [Worktree evidence record](../schemas/worktree-evidence-record.schema.json)
+- [Worktree conflict record](../schemas/worktree-conflict-record.schema.json)

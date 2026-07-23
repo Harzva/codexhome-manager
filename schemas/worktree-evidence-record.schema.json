@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/worktree-evidence-record.schema.json",
+  "title": "CodexHome Worktree Evidence Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "evidence", "eventId", "run", "safety"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "schemaVersion": { "const": "codexhome.worktree-evidence-record.v1" },
+    "evidence": { "$ref": "worktree-evidence.schema.json" },
+    "eventId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "run": { "$ref": "agent-runs.schema.json#/$defs/run" },
+    "safety": { "$ref": "worktree-plan.schema.json#/$defs/safety" }
+  }
+}

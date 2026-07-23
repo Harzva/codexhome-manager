@@ -19,6 +19,11 @@ All notable changes to this project will be documented in this file.
 - Immutable route candidate, score, cost, and rejection snapshots in Agent Run events.
 - Atomic route evaluation/append with evaluation timestamps and observed-event counts.
 - Versioned `route validate`, `route recommend`, and `route decide` CLI contracts.
+- Run-bound isolated Git worktrees with deterministic unique `codex/` branches.
+- Real commit/diff/test evidence with private patch/log sidecars and SHA-256 provenance.
+- Independent main-Home review and target-branch conflict gates before Run completion.
+- Explicit `human_required` and `replan_requested` conflict dispositions.
+- Versioned worktree plan, evidence, conflict, event, Run, and summary schema coverage.
 
 ### Security
 
@@ -28,6 +33,8 @@ All notable changes to this project will be documented in this file.
 - Existing event-store parent directories keep their permissions; files remain owner-only.
 - Sensitive-directory requests require an explicit locked Home and record no directory path.
 - Linked Attempts must match the Home, account, and model selected by their route decision.
+- Worktree self-review is rejected; child output cannot be accepted without a different reviewer Home.
+- Worktree creation rejects existing paths/branches and rolls back if event recording fails.
 
 ## [0.2.0-alpha.1]
 

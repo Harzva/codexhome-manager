@@ -48,6 +48,10 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Use live quota, health, rate-limit, historical success, duration, cost, and active-load evidence.
 - Lock a Home or model and record immutable candidate snapshots in the Agent Run event chain.
 - Evaluate and append Run route decisions under one lock with reproducible event-count provenance.
+- Create one unique `codex/` branch and isolated Git worktree per Run.
+- Capture committed patch/test evidence with SHA-256, duration, and clean-tree state.
+- Require a different Home to approve the latest evidence before Run completion.
+- Detect target-branch conflicts and route them to a human or explicit replan.
 
 ## Five-minute quickstart
 
@@ -100,6 +104,10 @@ codexhome run show <run-id> --json
 codexhome route validate --route-policy router-policy.json --json
 codexhome route recommend route-request.json --route-policy router-policy.json --json
 codexhome route decide route-request.json --run-id <run-id> --route-policy router-policy.json --json
+codexhome run worktree prepare <run-id> <attempt-id> --repository /path/to/repo --dry-run
+codexhome run worktree evidence <run-id> <attempt-id> --test-label tests --test-program cargo -- test --workspace
+codexhome run worktree review <run-id> <attempt-id> <evidence-id> --decision approved --reason reviewed --home-id home-review --model reviewer-model
+codexhome run worktree conflict-check <run-id> <attempt-id> <evidence-id> --target-ref main --home-id home-review --model reviewer-model
 ```
 
 Clone Skills, Rules, and Hooks only after reviewing the source Home:
@@ -137,7 +145,7 @@ Registry path precedence is `--registry`, then `CODEXHOME_REGISTRY`, then `~/.co
 
 `--json` writes only JSON to stdout. Progress and diagnostics must never corrupt the JSON stream. Reports exclude credential values but include local Home paths and provider hostnames, so review them before sharing publicly.
 
-The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`, and `codexhome.route-request.v1` / `codexhome.route-policy.v1` / `codexhome.route-decision.v1`.
+The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`, `codexhome.route-request.v1` / `codexhome.route-policy.v1` / `codexhome.route-decision.v1`, and versioned worktree plan/evidence/conflict contracts.
 
 The Agent Run state is projected from the same append-only observability stream, so cost analysis and lifecycle state cannot silently drift. The stream excludes prompts, responses, credential values, arbitrary payloads, raw tool arguments, and artifact paths. See [docs/observability.md](docs/observability.md) and [docs/agent-runs.md](docs/agent-runs.md).
 

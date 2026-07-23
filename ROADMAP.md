@@ -39,6 +39,16 @@ The detailed product roadmap was developed before repository initialization. Thi
 - Atomic decision recording with evaluation time and observed-event-count provenance.
 - `route validate`, `route recommend`, and `route decide` CLI flows.
 
+## v0.2.3 — Worktree orchestration and review gates ✅
+
+- Unique Run-bound `codex/` branches and isolated worktree paths.
+- Three-Run parallel isolation with deterministic rollback.
+- Real commit, binary patch, diff-stat, clean-tree, test, duration, and hash evidence.
+- Independent main-Home review bound to an immutable evidence ID.
+- Target-ref conflict checks with explicit human/replan disposition.
+- Run completion gate that forbids silent child-output acceptance.
+- Versioned CLI JSON, event projections, public schemas, and end-to-end tests.
+
 ## v0.3 — Skill placement
 
 - Skill Space manifests and capacity budgets.
@@ -52,8 +62,7 @@ The detailed product roadmap was developed before repository initialization. Thi
 ## v0.4 — Execution engine
 
 - Launch `codexhome run @agent` from the durable Run state.
-- Isolated worktrees.
-- Process capture, final result, Diff, and test evidence.
+- Process capture and final-result adapters on top of isolated worktrees.
 - Timeout/cancellation signals and review-state execution adapters.
 
 ## v0.5 — Agent Household

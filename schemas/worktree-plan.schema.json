@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/worktree-plan.schema.json",
+  "title": "CodexHome Worktree Plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "taskId",
+    "runId",
+    "attemptId",
+    "repositoryRoot",
+    "worktreePath",
+    "branch",
+    "baseRef",
+    "baseCommit",
+    "responsibleIdentity",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.worktree-plan.v1" },
+    "taskId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "runId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "attemptId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "repositoryRoot": { "$ref": "observability-event.schema.json#/$defs/localPath" },
+    "worktreePath": { "$ref": "observability-event.schema.json#/$defs/localPath" },
+    "branch": { "$ref": "observability-event.schema.json#/$defs/label" },
+    "baseRef": { "$ref": "observability-event.schema.json#/$defs/label" },
+    "baseCommit": { "$ref": "observability-event.schema.json#/$defs/gitCommit" },
+    "responsibleIdentity": {
+      "$ref": "observability-event.schema.json#/$defs/identity"
+    },
+    "safety": { "$ref": "#/$defs/safety" }
+  },
+  "$defs": {
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretsRedacted",
+        "includesSecrets",
+        "readsAuthContents",
+        "includesLocalPaths"
+      ],
+      "properties": {
+        "secretsRedacted": { "const": true },
+        "includesSecrets": { "const": false },
+        "readsAuthContents": { "const": false },
+        "includesLocalPaths": { "const": true }
+      }
+    }
+  }
+}
