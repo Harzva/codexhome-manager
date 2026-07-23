@@ -1,10 +1,13 @@
 use anyhow::{bail, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use codexhome_core::{
-    discover, doctor, CodexHomeSummary, DiscoveryOptions, DiscoveryReport, HomeManager,
-    HomeMutationResult, RegisteredHomeView, RegistryReport, RegistryStore,
+    discover, doctor, observability_events_csv, parse_observability_events, CodexHomeSummary,
+    DiscoveryOptions, DiscoveryReport, HomeManager, HomeMutationResult, ObservabilityFilter,
+    ObservabilityStore, ObservabilitySummary, RegisteredHomeView, RegistryReport, RegistryStore,
 };
 use serde_json::json;
+use std::fs;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -14,7 +17,7 @@ use std::process::ExitCode;
     version,
     about = "Discover and manage specialized Codex Homes",
     long_about = "Discover, register, and manage multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output.",
-    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome home import /path/to/home --alias @research --specialty papers\n  codexhome home clone @research @reviewer --path /path/to/reviewer --dry-run"
+    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome home import /path/to/home --alias @research --specialty papers\n  codexhome observe record events.jsonl\n  codexhome observe summary --home-id @research --json"
 )]
 struct Cli {
     /// Add a CODEX_HOME candidate without changing the active shell environment.
@@ -24,6 +27,10 @@ struct Cli {
     /// Override the registry file (or set CODEXHOME_REGISTRY).
     #[arg(long, global = true, value_name = "FILE")]
     registry: Option<PathBuf>,
+
+    /// Override the append-only observability JSONL store.
+    #[arg(long, global = true, value_name = "FILE")]
+    observability_store: Option<PathBuf>,
 
     /// Emit stable machine-readable JSON to stdout.
     #[arg(long, global = true)]
@@ -57,6 +64,12 @@ enum Command {
     Home {
         #[command(subcommand)]
         command: HomeCommand,
+    },
+
+    /// Record, verify, summarize, and export task/run observability events.
+    Observe {
+        #[command(subcommand)]
+        command: ObserveCommand,
     },
 }
 
@@ -151,6 +164,81 @@ enum HomeCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum ObserveCommand {
+    /// Append one event, a JSON array, or JSONL events to the store.
+    Record {
+        /// JSON/JSONL input file, or - for stdin.
+        #[arg(value_name = "FILE")]
+        input: String,
+    },
+
+    /// Aggregate token, duration, cache, retry, failure, and health metrics.
+    Summary {
+        #[command(flatten)]
+        filter: ObservabilityFilterArgs,
+    },
+
+    /// Export filtered events as versioned JSON or flat CSV.
+    Export {
+        #[command(flatten)]
+        filter: ObservabilityFilterArgs,
+
+        #[arg(long, value_enum, default_value_t = ExportFormat::Json)]
+        format: ExportFormat,
+
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+    },
+
+    /// Validate schemas, ordering, IDs, and task/run/attempt/thread linkage.
+    Verify,
+
+    /// Print the active observability store path.
+    Path,
+}
+
+#[derive(Debug, Args, Default)]
+struct ObservabilityFilterArgs {
+    /// Match a Home ID or @alias.
+    #[arg(long = "home-id", alias = "home-alias")]
+    home_id: Option<String>,
+
+    /// Match an account ID.
+    #[arg(long)]
+    account: Option<String>,
+
+    /// Match a model name.
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Match a linked Codex thread ID.
+    #[arg(long)]
+    thread: Option<String>,
+
+    /// Match a run ID.
+    #[arg(long)]
+    run: Option<String>,
+}
+
+impl From<ObservabilityFilterArgs> for ObservabilityFilter {
+    fn from(value: ObservabilityFilterArgs) -> Self {
+        Self {
+            home: value.home_id,
+            account: value.account,
+            model: value.model,
+            thread: value.thread,
+            run: value.run,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExportFormat {
+    Json,
+    Csv,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let json_errors = cli.json;
@@ -183,6 +271,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let Cli {
         home,
         registry,
+        observability_store,
         json,
         command,
     } = cli;
@@ -218,6 +307,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Registry { command } => run_registry(command, registry, json),
         Command::Home { command } => run_home(command, registry, json),
+        Command::Observe { command } => run_observe(command, observability_store, json),
     }
 }
 
@@ -306,6 +396,118 @@ fn run_home(command: HomeCommand, registry_path: Option<PathBuf>, json: bool) ->
     };
     output(json, &result, || print_mutation(&result))?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_observe(
+    command: ObserveCommand,
+    store_path: Option<PathBuf>,
+    json: bool,
+) -> Result<ExitCode> {
+    let store = ObservabilityStore::from_environment(store_path)?;
+    match command {
+        ObserveCommand::Record { input } => {
+            let contents = read_observability_input(&input)?;
+            let events = parse_observability_events(&contents)?;
+            let report = store.append(&events)?;
+            output(json, &report, || {
+                println!(
+                    "Recorded {} event(s); store now contains {}.",
+                    report.appended, report.total_events
+                );
+                println!("{}", report.store_path);
+            })?;
+        }
+        ObserveCommand::Summary { filter } => {
+            let report = store.summary(&filter.into())?;
+            output(json, &report, || print_observability_summary(&report))?;
+        }
+        ObserveCommand::Export {
+            filter,
+            format,
+            output: output_path,
+        } => {
+            let export = store.export(&filter.into())?;
+            if let Some(parent) = output_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+            {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
+            }
+            let format_name = match format {
+                ExportFormat::Json => {
+                    let contents = serde_json::to_string_pretty(&export)
+                        .context("failed to serialize observability export")?;
+                    fs::write(&output_path, format!("{contents}\n"))
+                        .with_context(|| format!("failed to write {}", output_path.display()))?;
+                    "json"
+                }
+                ExportFormat::Csv => {
+                    fs::write(&output_path, observability_events_csv(&export.events))
+                        .with_context(|| format!("failed to write {}", output_path.display()))?;
+                    "csv"
+                }
+            };
+            let report = json!({
+                "ok": true,
+                "schemaVersion": "codexhome.observability-export-report.v1",
+                "format": format_name,
+                "outputPath": output_path.to_string_lossy(),
+                "eventCount": export.events.len(),
+                "safety": export.safety,
+            });
+            if json {
+                print_json(&report)?;
+            } else {
+                println!(
+                    "Exported {} event(s) as {} to {}.",
+                    export.events.len(),
+                    format_name,
+                    output_path.display()
+                );
+            }
+        }
+        ObserveCommand::Verify => {
+            let report = store.verify()?;
+            output(json, &report, || {
+                println!(
+                    "Observability store verified: {} event(s), {} task(s), {} run(s), {} attempt(s), {} thread(s).",
+                    report.event_count,
+                    report.task_count,
+                    report.run_count,
+                    report.attempt_count,
+                    report.thread_count
+                );
+                println!("{}", report.store_path);
+            })?;
+        }
+        ObserveCommand::Path => {
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.observability-path.v1",
+                    "storePath": store.path().to_string_lossy(),
+                    "includesLocalPaths": true,
+                }))?;
+            } else {
+                println!("{}", store.path().display());
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn read_observability_input(input: &str) -> Result<String> {
+    if input == "-" {
+        let mut contents = String::new();
+        io::stdin()
+            .read_to_string(&mut contents)
+            .context("failed to read observability events from stdin")?;
+        Ok(contents)
+    } else {
+        fs::read_to_string(input)
+            .with_context(|| format!("failed to read observability input {input}"))
+    }
 }
 
 fn output(value_is_json: bool, value: &impl serde::Serialize, human: impl FnOnce()) -> Result<()> {
@@ -441,6 +643,54 @@ fn print_registry(report: &RegistryReport) {
         }
         for issue in &home.issues {
             println!("  warning: {issue}");
+        }
+    }
+}
+
+fn print_observability_summary(report: &ObservabilitySummary) {
+    let totals = &report.totals;
+    println!(
+        "CodexHome Observability · {} event(s) · {} task(s) · {} run(s) · {} attempt(s)",
+        report.event_count, totals.tasks, totals.runs, totals.attempts
+    );
+    println!("{}", report.store_path);
+    println!();
+    println!(
+        "Tokens: {} input + {} output = {} total ({} cached input)",
+        totals.input_tokens, totals.output_tokens, totals.total_tokens, totals.cached_input_tokens
+    );
+    println!(
+        "Duration: {} ms · retries: {} · estimated cost: {} microUSD",
+        totals.duration_ms, totals.retries, totals.estimated_cost_microusd
+    );
+    println!(
+        "Cache hit rate: {:.2}% · attempt failure rate: {:.2}%",
+        f64::from(totals.cache_hit_rate_basis_points) / 100.0,
+        f64::from(totals.failure_rate_basis_points) / 100.0
+    );
+    println!(
+        "Tool calls: {} · artifacts: {} · verifications: {} · threads: {}",
+        totals.tool_calls, totals.artifacts, totals.verifications, totals.threads
+    );
+    if !report.latest_home_health.is_empty() {
+        println!();
+        println!("Latest Home health:");
+        for health in &report.latest_home_health {
+            println!(
+                "  {} · {:?} · service={} · auth={}",
+                health.home_id,
+                health.status,
+                if health.snapshot.service_reachable {
+                    "reachable"
+                } else {
+                    "unreachable"
+                },
+                health
+                    .snapshot
+                    .auth_valid
+                    .map(|valid| if valid { "valid" } else { "invalid" })
+                    .unwrap_or("unknown")
+            );
         }
     }
 }

@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/observability-event.schema.json",
+  "title": "CodexHome Observability Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "timestampMs",
+    "eventType",
+    "status",
+    "trace",
+    "identity",
+    "safety"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.observability-event.v1" },
+    "eventId": { "$ref": "#/$defs/identifier" },
+    "timestampMs": { "type": "integer", "minimum": 0 },
+    "eventType": {
+      "enum": [
+        "task_created",
+        "run_started",
+        "attempt_started",
+        "attempt_completed",
+        "attempt_failed",
+        "thread_linked",
+        "tool_call_completed",
+        "artifact_created",
+        "verification_completed",
+        "run_completed",
+        "run_failed",
+        "quota_snapshot",
+        "rate_limited",
+        "auth_invalid",
+        "home_health"
+      ]
+    },
+    "status": {
+      "enum": [
+        "started",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "retried",
+        "degraded",
+        "healthy",
+        "unhealthy"
+      ]
+    },
+    "trace": { "$ref": "#/$defs/trace" },
+    "identity": { "$ref": "#/$defs/identity" },
+    "usage": { "$ref": "#/$defs/usage" },
+    "parentEventId": {
+      "oneOf": [
+        { "$ref": "#/$defs/identifier" },
+        { "type": "null" }
+      ]
+    },
+    "toolName": { "$ref": "#/$defs/nullableLabel" },
+    "artifactKind": { "$ref": "#/$defs/nullableLabel" },
+    "verificationKind": { "$ref": "#/$defs/nullableLabel" },
+    "failure": {
+      "oneOf": [
+        { "$ref": "#/$defs/failure" },
+        { "type": "null" }
+      ]
+    },
+    "health": {
+      "oneOf": [
+        { "$ref": "#/$defs/health" },
+        { "type": "null" }
+      ]
+    },
+    "safety": { "$ref": "#/$defs/safety" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._:/@-]+$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "nullableLabel": {
+      "oneOf": [
+        { "$ref": "#/$defs/label" },
+        { "type": "null" }
+      ]
+    },
+    "nullableIdentifier": {
+      "oneOf": [
+        { "$ref": "#/$defs/identifier" },
+        { "type": "null" }
+      ]
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "taskId": { "$ref": "#/$defs/nullableIdentifier" },
+        "runId": { "$ref": "#/$defs/nullableIdentifier" },
+        "attemptId": { "$ref": "#/$defs/nullableIdentifier" },
+        "threadId": { "$ref": "#/$defs/nullableIdentifier" },
+        "parentThreadId": { "$ref": "#/$defs/nullableIdentifier" },
+        "forkId": { "$ref": "#/$defs/nullableIdentifier" }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "homeId": { "$ref": "#/$defs/nullableIdentifier" },
+        "homeAlias": { "$ref": "#/$defs/nullableLabel" },
+        "accountId": { "$ref": "#/$defs/nullableIdentifier" },
+        "provider": { "$ref": "#/$defs/nullableLabel" },
+        "model": { "$ref": "#/$defs/nullableLabel" },
+        "agentRole": { "$ref": "#/$defs/nullableLabel" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "cachedInputTokens": { "type": "integer", "minimum": 0 },
+        "cacheHits": { "type": "integer", "minimum": 0 },
+        "cacheMisses": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "estimatedCostMicrousd": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "reason"],
+      "properties": {
+        "code": { "$ref": "#/$defs/label" },
+        "phase": { "$ref": "#/$defs/nullableLabel" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serviceReachable"],
+      "properties": {
+        "serviceReachable": { "type": "boolean" },
+        "authValid": {
+          "type": ["boolean", "null"]
+        },
+        "quotaRemainingBasisPoints": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "rateLimitResetAtMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "detailCode": { "$ref": "#/$defs/nullableLabel" }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretsRedacted",
+        "includesSecretValues",
+        "readsAuthContents",
+        "includesLocalPaths"
+      ],
+      "properties": {
+        "secretsRedacted": { "const": true },
+        "includesSecretValues": { "const": false },
+        "readsAuthContents": { "const": false },
+        "includesLocalPaths": { "type": "boolean" }
+      }
+    }
+  }
+}

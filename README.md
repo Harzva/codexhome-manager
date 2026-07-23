@@ -36,6 +36,9 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Persist unique `@alias` values, family labels, and Unicode specialty tags.
 - Create new Homes, import existing Homes, and safely clone registered Homes.
 - Preview every lifecycle mutation with `--dry-run`.
+- Record append-only task/run/attempt/thread observability events.
+- Aggregate token, cache, duration, retry, failure, cost, and Home health metrics.
+- Export filtered observability events as versioned JSON or analysis-ready CSV.
 
 ## Five-minute quickstart
 
@@ -77,6 +80,10 @@ codexhome registry path
 codexhome home create @frontend --path /path/to/frontend --specialty ui
 codexhome home import /path/to/research --alias @research --specialty papers
 codexhome home clone @frontend @reviewer --path /path/to/reviewer --dry-run
+codexhome observe record events.jsonl
+codexhome observe summary --home-id @research --json
+codexhome observe verify
+codexhome observe export --format csv --output events.csv
 ```
 
 Clone Skills, Rules, and Hooks only after reviewing the source Home:
@@ -114,7 +121,9 @@ Registry path precedence is `--registry`, then `CODEXHOME_REGISTRY`, then `~/.co
 
 `--json` writes only JSON to stdout. Progress and diagnostics must never corrupt the JSON stream. Reports exclude credential values but include local Home paths and provider hostnames, so review them before sharing publicly.
 
-The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, and `codexhome.home-mutation.v1`.
+The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, and the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts.
+
+The observability stream is append-only and excludes prompts, responses, credential values, arbitrary payloads, and raw tool arguments. See [docs/observability.md](docs/observability.md).
 
 ## Security
 
@@ -147,6 +156,7 @@ For frontend-only development, use `npm run dev`. See [docs/troubleshooting.md](
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Registry format and lifecycle semantics](docs/registry.md)
 - [Desktop adapter contract](docs/desktop-api.md)
+- [Observability event and metric contract](docs/observability.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Product readiness audit](docs/product-readiness-v0.2.md)
 - [Security and privacy audit](docs/security-audit-v0.2.md)

@@ -1,4 +1,7 @@
-use codexhome_core::{discover, DiscoveryOptions, HomeManager, RegistryReport, RegistryStore};
+use codexhome_core::{
+    discover, DiscoveryOptions, HomeManager, ObservabilityFilter, ObservabilityStore,
+    ObservabilitySummary, RegistryReport, RegistryStore,
+};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -31,6 +34,13 @@ fn discover_homes() -> Result<codexhome_core::DiscoveryReport, String> {
     let options =
         DiscoveryOptions::from_environment(Vec::new()).map_err(|error| format!("{error:#}"))?;
     Ok(discover(&options))
+}
+
+#[tauri::command]
+fn observability_summary() -> Result<ObservabilitySummary, String> {
+    ObservabilityStore::from_environment(None)
+        .and_then(|store| store.summary(&ObservabilityFilter::default()))
+        .map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]
@@ -84,6 +94,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             registry_list,
             discover_homes,
+            observability_summary,
             create_home,
             import_home,
             clone_home

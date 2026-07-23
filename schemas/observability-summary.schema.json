@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/observability-summary.schema.json",
+  "title": "CodexHome Observability Summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "storePath",
+    "asOfTimestampMs",
+    "eventCount",
+    "totals",
+    "byHome",
+    "byAccount",
+    "byModel",
+    "byThread",
+    "latestHomeHealth",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.observability-summary.v1" },
+    "storePath": { "type": "string" },
+    "asOfTimestampMs": { "type": ["integer", "null"], "minimum": 0 },
+    "eventCount": { "type": "integer", "minimum": 0 },
+    "totals": { "$ref": "#/$defs/totals" },
+    "byHome": { "$ref": "#/$defs/groups" },
+    "byAccount": { "$ref": "#/$defs/groups" },
+    "byModel": { "$ref": "#/$defs/groups" },
+    "byThread": { "$ref": "#/$defs/groups" },
+    "latestHomeHealth": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["homeId", "timestampMs", "status", "snapshot"],
+        "properties": {
+          "homeId": { "type": "string" },
+          "timestampMs": { "type": "integer", "minimum": 0 },
+          "status": { "type": "string" },
+          "snapshot": { "type": "object" }
+        }
+      }
+    },
+    "safety": { "type": "object" }
+  },
+  "$defs": {
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tasks",
+        "runs",
+        "attempts",
+        "threads",
+        "toolCalls",
+        "artifacts",
+        "verifications",
+        "completedAttempts",
+        "failedAttempts",
+        "failureRateBasisPoints",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "cachedInputTokens",
+        "cacheHits",
+        "cacheMisses",
+        "cacheHitRateBasisPoints",
+        "durationMs",
+        "estimatedCostMicrousd",
+        "retries"
+      ],
+      "properties": {
+        "tasks": { "type": "integer", "minimum": 0 },
+        "runs": { "type": "integer", "minimum": 0 },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "threads": { "type": "integer", "minimum": 0 },
+        "toolCalls": { "type": "integer", "minimum": 0 },
+        "artifacts": { "type": "integer", "minimum": 0 },
+        "verifications": { "type": "integer", "minimum": 0 },
+        "completedAttempts": { "type": "integer", "minimum": 0 },
+        "failedAttempts": { "type": "integer", "minimum": 0 },
+        "failureRateBasisPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "cachedInputTokens": { "type": "integer", "minimum": 0 },
+        "cacheHits": { "type": "integer", "minimum": 0 },
+        "cacheMisses": { "type": "integer", "minimum": 0 },
+        "cacheHitRateBasisPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "estimatedCostMicrousd": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "totals"],
+        "properties": {
+          "key": { "type": "string" },
+          "totals": { "$ref": "#/$defs/totals" }
+        }
+      }
+    }
+  }
+}

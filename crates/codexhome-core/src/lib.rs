@@ -7,9 +7,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod home;
+mod observability;
 mod registry;
 
 pub use home::{CopySummary, HomeManager, HomeMutationResult};
+pub use observability::{
+    observability_events_csv, parse_observability_events, EventSafety, ExecutionIdentity,
+    FailureInfo, HealthSnapshot, LatestHomeHealth, ObservabilityAppendReport, ObservabilityEvent,
+    ObservabilityEventType, ObservabilityExport, ObservabilityFilter, ObservabilityGroup,
+    ObservabilityStatus, ObservabilityStore, ObservabilitySummary, ObservabilityTotals,
+    ObservabilityVerifyReport, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
+    OBSERVABILITY_EXPORT_SCHEMA_VERSION, OBSERVABILITY_SUMMARY_SCHEMA_VERSION,
+    OBSERVABILITY_VERIFY_SCHEMA_VERSION,
+};
 pub use registry::{
     normalize_alias, normalize_specialties, RegisteredHomeView, Registry, RegistryEntry,
     RegistryOrigin, RegistryReport, RegistryStore,

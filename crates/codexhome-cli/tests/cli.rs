@@ -18,6 +18,7 @@ fn root_help_is_useful() {
     assert!(stdout.contains("doctor"));
     assert!(stdout.contains("registry"));
     assert!(stdout.contains("home"));
+    assert!(stdout.contains("observe"));
     assert!(stdout.contains("--json"));
     assert!(stdout.contains("Examples:"));
 }
@@ -184,4 +185,175 @@ fn dry_run_and_duplicate_alias_errors_are_automation_friendly() {
         .as_str()
         .expect("message")
         .contains("already assigned"));
+}
+
+#[test]
+fn observability_record_summary_verify_and_export_form_one_cli_flow() {
+    let temp = TempDir::new().expect("temp dir");
+    let input = temp.path().join("events.json");
+    let store = temp.path().join("state/events.jsonl");
+    let csv = temp.path().join("exports/events.csv");
+    let safety = serde_json::json!({
+        "secretsRedacted": true,
+        "includesSecretValues": false,
+        "readsAuthContents": false,
+        "includesLocalPaths": false
+    });
+    let events = serde_json::json!([
+        {
+            "schemaVersion": "codexhome.observability-event.v1",
+            "eventId": "evt-1",
+            "timestampMs": 1,
+            "eventType": "task_created",
+            "status": "started",
+            "trace": {"taskId": "task-1"},
+            "identity": {},
+            "safety": safety
+        },
+        {
+            "schemaVersion": "codexhome.observability-event.v1",
+            "eventId": "evt-2",
+            "timestampMs": 2,
+            "eventType": "run_started",
+            "status": "started",
+            "trace": {"taskId": "task-1", "runId": "run-1"},
+            "identity": {},
+            "safety": safety
+        },
+        {
+            "schemaVersion": "codexhome.observability-event.v1",
+            "eventId": "evt-3",
+            "timestampMs": 3,
+            "eventType": "attempt_started",
+            "status": "running",
+            "trace": {
+                "taskId": "task-1",
+                "runId": "run-1",
+                "attemptId": "attempt-1"
+            },
+            "identity": {
+                "homeId": "home-1",
+                "homeAlias": "@research",
+                "accountId": "account-1",
+                "model": "gpt-test"
+            },
+            "safety": safety
+        },
+        {
+            "schemaVersion": "codexhome.observability-event.v1",
+            "eventId": "evt-4",
+            "timestampMs": 4,
+            "eventType": "thread_linked",
+            "status": "running",
+            "trace": {
+                "taskId": "task-1",
+                "runId": "run-1",
+                "threadId": "thread-1"
+            },
+            "identity": {},
+            "safety": safety
+        },
+        {
+            "schemaVersion": "codexhome.observability-event.v1",
+            "eventId": "evt-5",
+            "timestampMs": 5,
+            "eventType": "attempt_completed",
+            "status": "succeeded",
+            "trace": {
+                "taskId": "task-1",
+                "runId": "run-1",
+                "attemptId": "attempt-1",
+                "threadId": "thread-1"
+            },
+            "identity": {
+                "homeId": "home-1",
+                "homeAlias": "@research",
+                "accountId": "account-1",
+                "model": "gpt-test"
+            },
+            "usage": {
+                "inputTokens": 100,
+                "outputTokens": 25,
+                "cachedInputTokens": 80,
+                "cacheHits": 4,
+                "cacheMisses": 1,
+                "durationMs": 750,
+                "estimatedCostMicrousd": 900,
+                "retries": 1
+            },
+            "safety": safety
+        }
+    ]);
+    fs::write(
+        &input,
+        serde_json::to_vec_pretty(&events).expect("serialize events"),
+    )
+    .expect("write events");
+
+    let record = binary()
+        .args(["observe", "record"])
+        .arg(&input)
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("record events");
+    assert!(
+        record.status.success(),
+        "{}",
+        String::from_utf8_lossy(&record.stderr)
+    );
+    let report: Value = serde_json::from_slice(&record.stdout).expect("record JSON");
+    assert_eq!(report["appended"], 5);
+    assert_eq!(report["totalEvents"], 5);
+
+    let summary = binary()
+        .args(["observe", "summary", "--home-id", "@research"])
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("summarize events");
+    assert!(
+        summary.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&summary.stdout),
+        String::from_utf8_lossy(&summary.stderr)
+    );
+    let report: Value = serde_json::from_slice(&summary.stdout).expect("summary JSON");
+    assert_eq!(
+        report["schemaVersion"],
+        "codexhome.observability-summary.v1"
+    );
+    assert_eq!(report["totals"]["runs"], 1);
+    assert_eq!(report["totals"]["attempts"], 1);
+    assert_eq!(report["totals"]["totalTokens"], 125);
+    assert_eq!(report["totals"]["cacheHitRateBasisPoints"], 8000);
+    assert_eq!(report["totals"]["durationMs"], 750);
+
+    let verify = binary()
+        .args(["observe", "verify"])
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("verify events");
+    assert!(verify.status.success());
+    let report: Value = serde_json::from_slice(&verify.stdout).expect("verify JSON");
+    assert_eq!(report["eventCount"], 5);
+    assert_eq!(report["threadCount"], 1);
+
+    let export = binary()
+        .args(["observe", "export", "--format", "csv", "--output"])
+        .arg(&csv)
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("export events");
+    assert!(export.status.success());
+    let csv_contents = fs::read_to_string(csv).expect("read CSV");
+    assert!(csv_contents.starts_with("schema_version,event_id"));
+    assert!(csv_contents.contains("attempt_completed"));
+    assert!(csv_contents.contains("gpt-test"));
 }
