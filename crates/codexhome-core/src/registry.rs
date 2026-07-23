@@ -129,11 +129,23 @@ pub struct RegistryStore {
 
 impl RegistryStore {
     pub fn from_environment(override_path: Option<PathBuf>) -> Result<Self> {
-        let home = user_home().context("cannot discover the current user home directory")?;
-        let path = override_path
-            .or_else(|| env::var_os("CODEXHOME_REGISTRY").map(PathBuf::from))
-            .unwrap_or_else(|| home.join(".codexhome/registry.json"));
-        Ok(Self::new(expand_home(&path, &home)))
+        let explicit = override_path.or_else(|| {
+            env::var_os("CODEXHOME_REGISTRY")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        });
+        let path = match explicit {
+            Some(path) if path.starts_with("~") => {
+                let home =
+                    user_home().context("cannot discover the current user home directory")?;
+                expand_home(&path, &home)
+            }
+            Some(path) => path,
+            None => user_home()
+                .context("cannot discover the current user home directory")?
+                .join(".codexhome/registry.json"),
+        };
+        Ok(Self::new(path))
     }
 
     pub fn new(path: PathBuf) -> Self {

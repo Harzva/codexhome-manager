@@ -8,7 +8,7 @@
 
 CodexHome Manager helps Codex power users discover, separate, label, clone, and manage multiple `CODEX_HOME` directories as isolated Skill Spaces and specialized Agent Households.
 
-> Status: v0.2 alpha. Discovery, registry aliases, safe Home lifecycle commands, append-only observability, durable Agent Run projections, an explainable policy-router CLI, and the connected Desktop UI work. Process execution, automatic scheduling, Skill placement, and MCP routing remain roadmap work.
+> Status: v0.2 alpha. Discovery, registry aliases, safe Home lifecycle commands, append-only observability, durable Agent Run projections, explainable routing, Scheduler v1 control-plane primitives, and the connected Desktop UI work. External process execution, Skill placement, and MCP routing remain roadmap work.
 
 ## Why
 
@@ -52,6 +52,10 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Capture committed patch/test evidence with SHA-256, duration, and clean-tree state.
 - Require a different Home to approve the latest evidence before Run completion.
 - Detect target-branch conflicts and route them to a human or explicit replan.
+- Project a durable Scheduler queue from the same append-only Run event stream.
+- Dispatch atomically with priority, dependencies, time windows, budgets, concurrency limits, Route evidence, and leases.
+- Defer unavailable, rate-limited, quota-exhausted, or unhealthy Homes with explainable fallback evidence.
+- Renew long-task leases and require explicit recovery before retrying expired work.
 
 ## Five-minute quickstart
 
@@ -104,6 +108,17 @@ codexhome run show <run-id> --json
 codexhome route validate --route-policy router-policy.json --json
 codexhome route recommend route-request.json --route-policy router-policy.json --json
 codexhome route decide route-request.json --run-id <run-id> --route-policy router-policy.json --json
+# First replace the example runId with an active Run created above.
+codexhome schedule enqueue examples/scheduler-job.example.json
+codexhome schedule list --json
+codexhome schedule dispatch \
+  --scheduler-policy examples/scheduler-policy.example.json \
+  --route-policy examples/router-policy.example.json \
+  --json
+codexhome schedule tick --json
+codexhome schedule policy validate \
+  --scheduler-policy examples/scheduler-policy.example.json \
+  --json
 codexhome run worktree prepare <run-id> <attempt-id> --repository /path/to/repo --dry-run
 codexhome run worktree evidence <run-id> <attempt-id> --test-label tests --test-program cargo -- test --workspace
 codexhome run worktree review <run-id> <attempt-id> <evidence-id> --decision approved --reason reviewed --home-id home-review --model reviewer-model
@@ -145,9 +160,9 @@ Registry path precedence is `--registry`, then `CODEXHOME_REGISTRY`, then `~/.co
 
 `--json` writes only JSON to stdout. Progress and diagnostics must never corrupt the JSON stream. Reports exclude credential values but include local Home paths and provider hostnames, so review them before sharing publicly.
 
-The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`, `codexhome.route-request.v1` / `codexhome.route-policy.v1` / `codexhome.route-decision.v1`, and versioned worktree plan/evidence/conflict contracts.
+The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`, `codexhome.route-request.v1` / `codexhome.route-policy.v1` / `codexhome.route-decision.v1`, `codexhome.scheduler-job.v1` / `codexhome.scheduler-policy.v1` / Scheduler output contracts, and versioned worktree plan/evidence/conflict contracts.
 
-The Agent Run state is projected from the same append-only observability stream, so cost analysis and lifecycle state cannot silently drift. The stream excludes prompts, responses, credential values, arbitrary payloads, raw tool arguments, and artifact paths. See [docs/observability.md](docs/observability.md) and [docs/agent-runs.md](docs/agent-runs.md).
+Agent Run and Scheduler state are projected from the same append-only observability stream, so queue state, cost analysis, and lifecycle state cannot silently drift. The stream excludes prompts, responses, credential values, arbitrary payloads, raw tool arguments, and artifact paths. See [docs/observability.md](docs/observability.md), [docs/agent-runs.md](docs/agent-runs.md), and [docs/scheduler.md](docs/scheduler.md).
 
 ## Security
 
@@ -183,6 +198,7 @@ For frontend-only development, use `npm run dev`. See [docs/troubleshooting.md](
 - [Observability event and metric contract](docs/observability.md)
 - [Agent Run lifecycle and recovery contract](docs/agent-runs.md)
 - [Explainable policy router](docs/policy-router.md)
+- [Scheduler v1 queue, lease, fallback, and recovery contract](docs/scheduler.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Product readiness audit](docs/product-readiness-v0.2.md)
 - [Security and privacy audit](docs/security-audit-v0.2.md)

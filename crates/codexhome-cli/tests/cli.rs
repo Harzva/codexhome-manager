@@ -55,6 +55,7 @@ fn root_help_is_useful() {
     assert!(stdout.contains("task"));
     assert!(stdout.contains("run"));
     assert!(stdout.contains("route"));
+    assert!(stdout.contains("schedule"));
     assert!(stdout.contains("--json"));
     assert!(stdout.contains("Examples:"));
 }
@@ -390,6 +391,10 @@ fn observability_record_summary_verify_and_export_form_one_cli_flow() {
     assert!(export.status.success());
     let csv_contents = fs::read_to_string(csv).expect("read CSV");
     assert!(csv_contents.starts_with("schema_version,event_id"));
+    assert!(csv_contents
+        .lines()
+        .next()
+        .is_some_and(|header| header.contains("scheduler_job_id")));
     assert!(csv_contents.contains("attempt_completed"));
     assert!(csv_contents.contains("gpt-test"));
 }
@@ -811,6 +816,293 @@ fn route_cli_records_explainable_decision_and_binds_attempt_identity() {
             .is_some_and(|reason| !reason.is_empty())
     );
     assert_eq!(report["run"]["attempts"][0]["routeDecisionId"], route_event);
+}
+
+#[test]
+fn scheduler_cli_enqueues_dispatches_ticks_and_cancels_one_run() {
+    let temp = TempDir::new().expect("temp dir");
+    let registry = temp.path().join("state/registry.json");
+    let store = temp.path().join("state/events.jsonl");
+    let route_policy = temp.path().join("route-policy.json");
+    let scheduler_policy = temp.path().join("scheduler-policy.json");
+    let job_path = temp.path().join("scheduler-job.json");
+    let home_path = temp.path().join("worker-home");
+
+    let create = binary()
+        .args(["home", "create", "@worker", "--path"])
+        .arg(&home_path)
+        .args(["--specialty", "coding", "--registry"])
+        .arg(&registry)
+        .arg("--json")
+        .env("HOME", temp.path())
+        .output()
+        .expect("create Home");
+    assert!(
+        create.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&create.stdout),
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let home: Value = serde_json::from_slice(&create.stdout).expect("Home JSON");
+    let home_id = home["entry"]["id"].as_str().expect("home id");
+
+    fs::write(
+        &route_policy,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": "codexhome.route-policy.v1",
+            "policyId": "scheduler-cli-route",
+            "revision": 1,
+            "candidates": [{
+                "candidateId": "worker",
+                "homeId": home_id,
+                "homeAlias": "@worker",
+                "accountId": "worker-account",
+                "provider": "test",
+                "model": "worker-model",
+                "specialties": ["coding"],
+                "capabilities": ["coding"],
+                "securityDomains": [],
+                "maxContextTokens": 128000,
+                "modelStrengthBasisPoints": 8000,
+                "inputCostMicrousdPerMillionTokens": 100,
+                "outputCostMicrousdPerMillionTokens": 200,
+                "maxConcurrentRuns": 4,
+                "baselineDurationMs": 1000
+            }]
+        }))
+        .expect("route policy JSON"),
+    )
+    .expect("write route policy");
+    fs::write(
+        &scheduler_policy,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": "codexhome.scheduler-policy.v1",
+            "policyId": "scheduler-cli",
+            "revision": 1,
+            "maxActiveJobs": 4,
+            "defaultHomeConcurrency": 2,
+            "defaultModelConcurrency": 2,
+            "maxLeaseMs": 60000
+        }))
+        .expect("scheduler policy JSON"),
+    )
+    .expect("write scheduler policy");
+    fs::write(
+        &job_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schemaVersion": "codexhome.scheduler-job.v1",
+            "jobId": "job-cli",
+            "runId": "run-scheduler-cli",
+            "priority": "high",
+            "dependencies": [],
+            "notBeforeMs": null,
+            "deadlineMs": null,
+            "attemptTimeoutMs": 60000,
+            "leaseDurationMs": 30000,
+            "maxDispatches": 3,
+            "maxConsecutiveFailures": 2,
+            "budget": {
+                "maxTotalTokens": 10000,
+                "maxDurationMs": 60000,
+                "maxCostMicrousd": 1000,
+                "maxAttempts": 3
+            },
+            "routeRequest": {
+                "schemaVersion": "codexhome.route-request.v1",
+                "requestId": "request-scheduler-cli",
+                "taskKind": "simple_code",
+                "estimatedContextTokens": 2000,
+                "estimatedOutputTokens": 500,
+                "requiredCapabilities": ["coding"],
+                "preferredSpecialties": [],
+                "sensitiveDirectory": false,
+                "requiredSecurityDomain": null,
+                "lockedHome": null,
+                "lockedModel": null,
+                "maxEstimatedCostMicrousd": null,
+                "allowDegraded": false
+            },
+            "candidatePreference": ["worker"]
+        }))
+        .expect("job JSON"),
+    )
+    .expect("write scheduler job");
+
+    run_json(
+        &store,
+        &[
+            "task",
+            "create",
+            "--task-id",
+            "task-scheduler-cli",
+            "--label",
+            "Scheduler CLI lifecycle",
+            "--kind",
+            "simple_code",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "start",
+            "task-scheduler-cli",
+            "--run-id",
+            "run-scheduler-cli",
+            "--max-total-tokens",
+            "10000",
+            "--max-attempts",
+            "3",
+        ],
+    );
+    let enqueue = binary()
+        .args(["schedule", "enqueue"])
+        .arg(&job_path)
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("enqueue");
+    assert!(
+        enqueue.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&enqueue.stdout),
+        String::from_utf8_lossy(&enqueue.stderr)
+    );
+    let enqueue: Value = serde_json::from_slice(&enqueue.stdout).expect("enqueue JSON");
+    assert_eq!(enqueue["schemaVersion"], "codexhome.scheduler-mutation.v1");
+    assert_eq!(enqueue["job"]["status"], "ready");
+
+    let dispatch = binary()
+        .args(["schedule", "dispatch", "--job-id", "job-cli"])
+        .arg("--scheduler-policy")
+        .arg(&scheduler_policy)
+        .arg("--route-policy")
+        .arg(&route_policy)
+        .arg("--registry")
+        .arg(&registry)
+        .arg("--observability-store")
+        .arg(&store)
+        .arg("--json")
+        .env("HOME", temp.path())
+        .output()
+        .expect("dispatch");
+    assert!(
+        dispatch.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&dispatch.stdout),
+        String::from_utf8_lossy(&dispatch.stderr)
+    );
+    let dispatch: Value = serde_json::from_slice(&dispatch.stdout).expect("dispatch JSON");
+    assert_eq!(dispatch["schemaVersion"], "codexhome.scheduler-dispatch.v1");
+    assert_eq!(dispatch["dispatched"], true);
+    assert_eq!(
+        dispatch["job"]["dispatches"][0]["details"]["selectedCandidateId"],
+        "worker"
+    );
+    let show = run_json(&store, &["schedule", "show", "job-cli"]);
+    assert_eq!(show["schemaVersion"], "codexhome.scheduler-report.v1");
+    assert_eq!(show["jobs"].as_array().map(Vec::len), Some(1));
+
+    let tick = binary()
+        .args(["schedule", "tick", "--observability-store"])
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("tick");
+    assert!(tick.status.success());
+    let tick: Value = serde_json::from_slice(&tick.stdout).expect("tick JSON");
+    assert_eq!(tick["eventIds"].as_array().map(Vec::len), Some(0));
+
+    let cancel = binary()
+        .args([
+            "schedule",
+            "cancel",
+            "job-cli",
+            "--reason",
+            "operator_cancelled",
+            "--input-tokens",
+            "10",
+            "--output-tokens",
+            "2",
+            "--duration-ms",
+            "5",
+            "--estimated-cost-microusd",
+            "1",
+            "--observability-store",
+        ])
+        .arg(&store)
+        .arg("--json")
+        .output()
+        .expect("cancel");
+    assert!(
+        cancel.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&cancel.stdout),
+        String::from_utf8_lossy(&cancel.stderr)
+    );
+    let cancel: Value = serde_json::from_slice(&cancel.stdout).expect("cancel JSON");
+    assert_eq!(cancel["job"]["status"], "cancelled");
+    let run = run_json(&store, &["run", "show", "run-scheduler-cli"]);
+    assert_eq!(run["run"]["status"], "cancelled");
+    assert_eq!(run["run"]["consumption"]["totalTokens"], 12);
+}
+
+#[test]
+fn scheduler_help_and_explicit_policy_paths_are_self_describing() {
+    let renew = binary()
+        .args(["schedule", "renew", "--help"])
+        .output()
+        .expect("renew help");
+    assert!(renew.status.success());
+    let help = String::from_utf8(renew.stdout).expect("help UTF-8");
+    assert!(help.contains("--dispatch-id"));
+    assert!(help.contains("--lease-id"));
+    assert!(help.contains("REASON_CODE"));
+    let cancel = binary()
+        .args(["schedule", "cancel", "--help"])
+        .output()
+        .expect("cancel help");
+    assert!(cancel.status.success());
+    let cancel_help = String::from_utf8(cancel.stdout).expect("cancel help UTF-8");
+    assert!(cancel_help.contains("Authoritative active Attempt duration"));
+
+    let temp = TempDir::new().expect("temp");
+    let policy = temp.path().join("scheduler-policy.json");
+    fs::write(
+        &policy,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "codexhome.scheduler-policy.v1",
+            "policyId": "explicit-policy",
+            "revision": 1,
+            "maxActiveJobs": 1,
+            "defaultHomeConcurrency": 1,
+            "defaultModelConcurrency": 1,
+            "maxLeaseMs": 1000
+        }))
+        .expect("policy JSON"),
+    )
+    .expect("write policy");
+    let output = binary()
+        .args(["schedule", "policy", "validate", "--scheduler-policy"])
+        .arg(&policy)
+        .arg("--json")
+        .env_remove("HOME")
+        .env_remove("USERPROFILE")
+        .env("CODEXHOME_SCHEDULER_POLICY", "")
+        .output()
+        .expect("validate explicit policy");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("policy report");
+    assert_eq!(
+        report["schemaVersion"],
+        "codexhome.scheduler-policy-report.v1"
+    );
 }
 
 #[test]

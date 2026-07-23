@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/scheduler-mutation.schema.json",
+  "title": "CodexHome Scheduler Mutation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "action", "eventIds", "job", "safety"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.scheduler-mutation.v1" },
+    "action": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "eventIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+    },
+    "job": { "$ref": "scheduler-report.schema.json#/$defs/job" },
+    "safety": { "$ref": "scheduler-report.schema.json#/$defs/safety" }
+  }
+}

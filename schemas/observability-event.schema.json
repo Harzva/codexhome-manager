@@ -27,6 +27,16 @@
         "worktree_evidence_recorded",
         "worktree_review_recorded",
         "worktree_conflict_checked",
+        "scheduler_job_queued",
+        "scheduler_dispatch_decided",
+        "scheduler_dispatch_deferred",
+        "scheduler_job_paused",
+        "scheduler_job_resumed",
+        "scheduler_job_cancelled",
+        "scheduler_job_timed_out",
+        "scheduler_lease_renewed",
+        "scheduler_recovery_required",
+        "scheduler_recovery_resolved",
         "attempt_completed",
         "attempt_failed",
         "thread_linked",
@@ -235,6 +245,36 @@
             { "type": "null" }
           ]
         },
+        "schedulerJob": {
+          "oneOf": [
+            { "$ref": "scheduler-job.schema.json" },
+            { "type": "null" }
+          ]
+        },
+        "schedulerDispatch": {
+          "oneOf": [
+            { "$ref": "#/$defs/schedulerDispatch" },
+            { "type": "null" }
+          ]
+        },
+        "schedulerDeferred": {
+          "oneOf": [
+            { "$ref": "#/$defs/schedulerDeferred" },
+            { "type": "null" }
+          ]
+        },
+        "schedulerStateChange": {
+          "oneOf": [
+            { "$ref": "#/$defs/schedulerStateChange" },
+            { "type": "null" }
+          ]
+        },
+        "schedulerLease": {
+          "oneOf": [
+            { "$ref": "#/$defs/schedulerLease" },
+            { "type": "null" }
+          ]
+        },
         "artifactId": { "$ref": "#/$defs/nullableIdentifier" },
         "verificationId": { "$ref": "#/$defs/nullableIdentifier" },
         "targetArtifactId": { "$ref": "#/$defs/nullableIdentifier" },
@@ -405,6 +445,111 @@
         },
         "conflictingPathsCount": { "type": "integer", "minimum": 0 },
         "conflictsSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "schedulerSelectionMode": {
+      "enum": ["dynamic", "preferred", "fallback"]
+    },
+    "schedulerDeferredCode": {
+      "enum": [
+        "dependency_pending",
+        "dependency_failed",
+        "not_before",
+        "deadline_expired",
+        "run_not_ready",
+        "budget_exhausted",
+        "dispatch_limit",
+        "failure_threshold",
+        "global_concurrency",
+        "home_concurrency",
+        "model_concurrency",
+        "no_eligible_route",
+        "active_attempt",
+        "recovery_required"
+      ]
+    },
+    "schedulerDispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "dispatchId",
+        "dispatchOrdinal",
+        "attemptId",
+        "routeDecisionId",
+        "leaseId",
+        "leasedAtMs",
+        "leaseExpiresAtMs",
+        "selectedCandidateId",
+        "selectionMode",
+        "schedulerRejections"
+      ],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/identifier" },
+        "dispatchId": { "$ref": "#/$defs/identifier" },
+        "dispatchOrdinal": { "type": "integer", "minimum": 1 },
+        "attemptId": { "$ref": "#/$defs/identifier" },
+        "routeDecisionId": { "$ref": "#/$defs/identifier" },
+        "leaseId": { "$ref": "#/$defs/identifier" },
+        "leasedAtMs": { "type": "integer", "minimum": 0 },
+        "leaseExpiresAtMs": { "type": "integer", "minimum": 0 },
+        "selectedCandidateId": { "$ref": "#/$defs/identifier" },
+        "selectionMode": { "$ref": "#/$defs/schedulerSelectionMode" },
+        "schedulerRejections": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      }
+    },
+    "schedulerDeferred": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "decisionId",
+        "code",
+        "reason",
+        "nextEligibleAtMs",
+        "routeDecisionId"
+      ],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/identifier" },
+        "decisionId": { "$ref": "#/$defs/identifier" },
+        "code": { "$ref": "#/$defs/schedulerDeferredCode" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "nextEligibleAtMs": { "type": ["integer", "null"], "minimum": 0 },
+        "routeDecisionId": { "$ref": "#/$defs/nullableIdentifier" }
+      }
+    },
+    "schedulerStateChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jobId", "reason", "automatic"],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/identifier" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "automatic": { "type": "boolean", "default": false }
+      }
+    },
+    "schedulerLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "dispatchId",
+        "leaseId",
+        "previousExpiresAtMs",
+        "leaseExpiresAtMs",
+        "reason"
+      ],
+      "properties": {
+        "jobId": { "$ref": "#/$defs/identifier" },
+        "dispatchId": { "$ref": "#/$defs/identifier" },
+        "leaseId": { "$ref": "#/$defs/identifier" },
+        "previousExpiresAtMs": { "type": "integer", "minimum": 0 },
+        "leaseExpiresAtMs": { "type": "integer", "minimum": 0 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 }
       }
     },
     "routeDecisionDetails": {

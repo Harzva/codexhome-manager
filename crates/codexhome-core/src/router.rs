@@ -381,10 +381,17 @@ pub struct RoutePolicyStore {
 
 impl RoutePolicyStore {
     pub fn from_environment(override_path: Option<PathBuf>) -> Result<Self> {
-        let home = user_home().context("cannot discover the current user home directory")?;
-        let path = override_path
-            .or_else(|| env::var_os("CODEXHOME_ROUTE_POLICY").map(PathBuf::from))
-            .unwrap_or_else(|| home.join(".codexhome/router-policy.json"));
+        let explicit = override_path.or_else(|| {
+            env::var_os("CODEXHOME_ROUTE_POLICY")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        });
+        let path = match explicit {
+            Some(path) => path,
+            None => user_home()
+                .context("cannot discover the current user home directory")?
+                .join(".codexhome/router-policy.json"),
+        };
         Ok(Self { path })
     }
 
@@ -1130,6 +1137,7 @@ fn validate_basis_points(name: &str, value: u16) -> Result<()> {
 fn validate_identifier(name: &str, value: &str) -> Result<()> {
     let valid = !value.is_empty()
         && value.len() <= 160
+        && !looks_sensitive_or_path_like(value)
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric()
                 || matches!(character, '.' | '_' | ':' | '/' | '@' | '-')
@@ -1142,10 +1150,43 @@ fn validate_identifier(name: &str, value: &str) -> Result<()> {
 
 fn validate_label(name: &str, value: &str) -> Result<()> {
     let value = value.trim();
-    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
-        bail!("{name} must be a non-empty label no longer than 256 bytes");
+    if value.is_empty()
+        || value.len() > 160
+        || looks_sensitive_or_path_like(value)
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '.' | '_' | ':' | '/' | '@' | '-')
+        })
+    {
+        bail!("{name} must be a safe routing identifier no longer than 160 bytes");
     }
     Ok(())
+}
+
+fn looks_sensitive_or_path_like(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let windows_absolute =
+        lower.as_bytes().get(1) == Some(&b':') && lower.as_bytes().get(2) == Some(&b'/');
+    value.starts_with('/')
+        || value.starts_with('~')
+        || windows_absolute
+        || value.contains("..")
+        || value.contains("//")
+        || lower.starts_with("sk-")
+        || lower.starts_with("ghp_")
+        || lower.starts_with("github_pat_")
+        || lower.starts_with("xox")
+        || lower.starts_with("akia")
+        || lower.starts_with("aiza")
+        || lower.starts_with("eyj")
+        || lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("password")
+        || lower.contains("secret")
+        || lower.contains("cookie")
+        || lower.contains("access_token")
+        || lower.contains("refresh_token")
+        || lower.contains("authorization")
 }
 
 fn validate_optional_label(name: &str, value: &Option<String>) -> Result<()> {
@@ -1346,6 +1387,19 @@ mod tests {
                     .iter()
                     .any(|reason| reason.contains("model strength"))
         }));
+    }
+
+    #[test]
+    fn route_metadata_rejects_prompts_paths_and_secret_like_values() {
+        let mut unsafe_request = request(RouteTaskKind::SimpleCode);
+        unsafe_request.required_capabilities = vec!["copy the raw response".to_owned()];
+        assert!(unsafe_request.validate().is_err());
+        unsafe_request.required_capabilities = vec!["coding".to_owned()];
+        unsafe_request.locked_home = Some("/Users/example/.codex".to_owned());
+        assert!(unsafe_request.validate().is_err());
+        unsafe_request.locked_home = Some("@primary".to_owned());
+        unsafe_request.locked_model = Some("sk-example-secret-value".to_owned());
+        assert!(unsafe_request.validate().is_err());
     }
 
     #[test]

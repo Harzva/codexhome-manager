@@ -77,12 +77,12 @@
         "preferredSpecialties": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+          "items": { "$ref": "route-request.schema.json#/$defs/routingIdentifier" }
         },
         "requiredCapabilities": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+          "items": { "$ref": "route-request.schema.json#/$defs/routingIdentifier" }
         },
         "minimumModelStrengthBasisPoints": {
           "type": ["integer", "null"],
@@ -113,26 +113,26 @@
         "candidateId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
         "enabled": { "type": "boolean", "default": true },
         "homeId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
-        "homeAlias": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+        "homeAlias": { "$ref": "route-request.schema.json#/$defs/nullableRoutingIdentifier" },
         "accountId": {
           "$ref": "observability-event.schema.json#/$defs/nullableIdentifier"
         },
-        "provider": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
-        "model": { "$ref": "observability-event.schema.json#/$defs/label" },
+        "provider": { "$ref": "route-request.schema.json#/$defs/nullableRoutingIdentifier" },
+        "model": { "$ref": "route-request.schema.json#/$defs/routingIdentifier" },
         "specialties": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+          "items": { "$ref": "route-request.schema.json#/$defs/routingIdentifier" }
         },
         "capabilities": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+          "items": { "$ref": "route-request.schema.json#/$defs/routingIdentifier" }
         },
         "securityDomains": {
           "type": "array",
           "uniqueItems": true,
-          "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+          "items": { "$ref": "route-request.schema.json#/$defs/routingIdentifier" }
         },
         "maxContextTokens": { "type": "integer", "minimum": 1 },
         "modelStrengthBasisPoints": { "$ref": "#/$defs/basisPoints" },

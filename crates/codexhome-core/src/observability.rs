@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 pub const OBSERVABILITY_EVENT_SCHEMA_VERSION: &str = "codexhome.observability-event.v1";
 pub const OBSERVABILITY_SUMMARY_SCHEMA_VERSION: &str = "codexhome.observability-summary.v1";
@@ -23,6 +24,16 @@ pub enum ObservabilityEventType {
     WorktreeEvidenceRecorded,
     WorktreeReviewRecorded,
     WorktreeConflictChecked,
+    SchedulerJobQueued,
+    SchedulerDispatchDecided,
+    SchedulerDispatchDeferred,
+    SchedulerJobPaused,
+    SchedulerJobResumed,
+    SchedulerJobCancelled,
+    SchedulerJobTimedOut,
+    SchedulerLeaseRenewed,
+    SchedulerRecoveryRequired,
+    SchedulerRecoveryResolved,
     AttemptCompleted,
     AttemptFailed,
     ThreadLinked,
@@ -97,11 +108,124 @@ pub struct EventDetails {
     pub worktree_evidence: Option<WorktreeEvidenceDetails>,
     pub worktree_review: Option<WorktreeReviewDetails>,
     pub worktree_conflict: Option<WorktreeConflictDetails>,
+    pub scheduler_job: Option<SchedulerJobSpec>,
+    pub scheduler_dispatch: Option<SchedulerDispatchDetails>,
+    pub scheduler_deferred: Option<SchedulerDeferredDetails>,
+    pub scheduler_state_change: Option<SchedulerStateChangeDetails>,
+    pub scheduler_lease: Option<SchedulerLeaseDetails>,
     pub artifact_id: Option<String>,
     pub verification_id: Option<String>,
     pub target_artifact_id: Option<String>,
     #[serde(default)]
     pub final_artifact_ids: Vec<String>,
+}
+
+pub const SCHEDULER_JOB_SCHEMA_VERSION: &str = "codexhome.scheduler-job.v1";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerPriority {
+    Background,
+    Low,
+    Normal,
+    High,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulerJobSpec {
+    pub schema_version: String,
+    pub job_id: String,
+    pub run_id: String,
+    pub priority: SchedulerPriority,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+    pub not_before_ms: Option<u64>,
+    pub deadline_ms: Option<u64>,
+    pub attempt_timeout_ms: u64,
+    pub lease_duration_ms: u64,
+    pub max_dispatches: u32,
+    pub max_consecutive_failures: u32,
+    pub budget: Option<RunBudget>,
+    pub route_request: RouteRequest,
+    #[serde(default)]
+    pub candidate_preference: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerSelectionMode {
+    Dynamic,
+    Preferred,
+    Fallback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulerDispatchDetails {
+    pub job_id: String,
+    pub dispatch_id: String,
+    pub dispatch_ordinal: u32,
+    pub attempt_id: String,
+    pub route_decision_id: String,
+    pub lease_id: String,
+    pub leased_at_ms: u64,
+    pub lease_expires_at_ms: u64,
+    pub selected_candidate_id: String,
+    pub selection_mode: SchedulerSelectionMode,
+    #[serde(default)]
+    pub scheduler_rejections: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedulerDeferredCode {
+    DependencyPending,
+    DependencyFailed,
+    NotBefore,
+    DeadlineExpired,
+    RunNotReady,
+    BudgetExhausted,
+    DispatchLimit,
+    FailureThreshold,
+    GlobalConcurrency,
+    HomeConcurrency,
+    ModelConcurrency,
+    NoEligibleRoute,
+    ActiveAttempt,
+    RecoveryRequired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulerDeferredDetails {
+    pub job_id: String,
+    pub decision_id: String,
+    pub code: SchedulerDeferredCode,
+    pub reason: String,
+    pub next_eligible_at_ms: Option<u64>,
+    pub route_decision_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulerStateChangeDetails {
+    pub job_id: String,
+    pub reason: String,
+    #[serde(default)]
+    pub automatic: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulerLeaseDetails {
+    pub job_id: String,
+    pub dispatch_id: String,
+    pub lease_id: String,
+    pub previous_expires_at_ms: u64,
+    pub lease_expires_at_ms: u64,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -489,6 +613,13 @@ pub struct ObservabilityTotals {
     pub worktree_evidence: u64,
     pub worktree_reviews: u64,
     pub worktree_conflict_checks: u64,
+    pub scheduler_jobs: u64,
+    pub scheduler_dispatches: u64,
+    pub scheduler_deferred: u64,
+    pub scheduler_pauses: u64,
+    pub scheduler_cancellations: u64,
+    pub scheduler_timeouts: u64,
+    pub scheduler_recoveries: u64,
     pub tool_calls: u64,
     pub artifacts: u64,
     pub verifications: u64,
@@ -574,10 +705,14 @@ pub struct ObservabilityStore {
 
 impl ObservabilityStore {
     pub fn from_environment(override_path: Option<PathBuf>) -> Result<Self> {
-        let home = user_home().context("cannot discover the current user home directory")?;
-        let path = override_path
-            .or_else(|| env::var_os("CODEXHOME_OBSERVABILITY_STORE").map(PathBuf::from))
-            .unwrap_or_else(|| home.join(".codexhome/observability/events.jsonl"));
+        let explicit =
+            override_path.or_else(|| non_empty_env_path("CODEXHOME_OBSERVABILITY_STORE"));
+        let path = match explicit {
+            Some(path) => path,
+            None => user_home()
+                .context("cannot discover the current user home directory")?
+                .join(".codexhome/observability/events.jsonl"),
+        };
         Ok(Self::new(path))
     }
 
@@ -590,12 +725,20 @@ impl ObservabilityStore {
     }
 
     pub fn load(&self) -> Result<Vec<ObservabilityEvent>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-        let file = File::open(&self.path)
-            .with_context(|| format!("failed to open {}", self.path.display()))?;
-        load_events(file, &self.path)
+        let parent = prepare_store_parent(&self.path)?;
+        let lock = open_store_lock(&self.path)?;
+        FileExt::lock_shared(&lock)
+            .with_context(|| format!("failed to lock {}", self.path.display()))?;
+        let result = if self.path.exists() {
+            let file = File::open(&self.path)
+                .with_context(|| format!("failed to open {}", self.path.display()))?;
+            load_events(file, &self.path)
+        } else {
+            Ok(Vec::new())
+        };
+        FileExt::unlock(&lock)?;
+        let _ = parent;
+        result
     }
 
     pub fn load_verified(&self) -> Result<Vec<ObservabilityEvent>> {
@@ -616,42 +759,43 @@ impl ObservabilityStore {
         &self,
         build: impl FnOnce(&[ObservabilityEvent]) -> Result<Vec<ObservabilityEvent>>,
     ) -> Result<ObservabilityAppendReport> {
-        let parent = self
-            .path
-            .parent()
-            .context("observability store path has no parent directory")?;
-        let parent_existed = parent.exists();
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-        if !parent_existed {
-            secure_directory(parent)?;
-        }
-        let mut file = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .append(true)
-            .open(&self.path)
-            .with_context(|| format!("failed to open {}", self.path.display()))?;
-        secure_file(&file)?;
-        file.lock_exclusive()
+        self.append_checked_inner(build, false)
+    }
+
+    pub(crate) fn append_checked_optional(
+        &self,
+        build: impl FnOnce(&[ObservabilityEvent]) -> Result<Vec<ObservabilityEvent>>,
+    ) -> Result<ObservabilityAppendReport> {
+        self.append_checked_inner(build, true)
+    }
+
+    fn append_checked_inner(
+        &self,
+        build: impl FnOnce(&[ObservabilityEvent]) -> Result<Vec<ObservabilityEvent>>,
+        allow_empty: bool,
+    ) -> Result<ObservabilityAppendReport> {
+        let parent = prepare_store_parent(&self.path)?;
+        let lock = open_store_lock(&self.path)?;
+        lock.lock_exclusive()
             .with_context(|| format!("failed to lock {}", self.path.display()))?;
-        file.seek(SeekFrom::Start(0))?;
-        let existing = load_events(&file, &self.path)?;
+        let existing = if self.path.exists() {
+            let file = File::open(&self.path)
+                .with_context(|| format!("failed to open {}", self.path.display()))?;
+            load_events(file, &self.path)?
+        } else {
+            Vec::new()
+        };
         let incoming = build(&existing)?;
-        if incoming.is_empty() {
+        if incoming.is_empty() && !allow_empty {
             bail!("at least one observability event is required");
         }
         let mut combined = existing.clone();
         combined.extend_from_slice(&incoming);
         verify_events(&combined)?;
-        file.seek(SeekFrom::End(0))?;
-        for event in &incoming {
-            serde_json::to_writer(&mut file, event)?;
-            file.write_all(b"\n")?;
+        if !incoming.is_empty() {
+            write_events_atomic(parent, &self.path, &combined)?;
         }
-        file.sync_data()
-            .with_context(|| format!("failed to sync {}", self.path.display()))?;
-        FileExt::unlock(&file)?;
+        FileExt::unlock(&lock)?;
         Ok(ObservabilityAppendReport {
             ok: true,
             schema_version: OBSERVABILITY_EVENT_SCHEMA_VERSION,
@@ -721,7 +865,7 @@ pub fn parse_observability_events(input: &str) -> Result<Vec<ObservabilityEvent>
 
 pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
     let mut output = String::from(
-        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties,routing_required_security_domain,routing_locked_home,routing_locked_model,routing_max_estimated_cost_microusd,routing_allow_degraded,routing_selected_candidate_id,routing_score_basis_points,transition_kind,from_attempt_id,worktree_repository_root,worktree_path,worktree_branch,worktree_base_ref,worktree_base_commit,worktree_head_commit,evidence_id,evidence_commit_count,evidence_diff_sha256,evidence_patch_path,evidence_patch_bytes,evidence_changed_files,evidence_insertions,evidence_deletions,evidence_clean,evidence_tests_succeeded,evidence_test_label,evidence_test_exit_code,evidence_test_duration_ms,evidence_test_output_sha256,evidence_test_log_path,review_id,review_evidence_id,review_decision,review_reason,conflict_check_id,conflict_evidence_id,conflict_target_ref,conflict_target_commit,conflict_head_commit,conflict_free,conflict_disposition,conflicting_paths_count,conflicts_sha256,artifact_id,verification_id,target_artifact_id,final_artifact_ids\n",
+        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties,routing_required_security_domain,routing_locked_home,routing_locked_model,routing_max_estimated_cost_microusd,routing_allow_degraded,routing_selected_candidate_id,routing_score_basis_points,transition_kind,from_attempt_id,worktree_repository_root,worktree_path,worktree_branch,worktree_base_ref,worktree_base_commit,worktree_head_commit,evidence_id,evidence_commit_count,evidence_diff_sha256,evidence_patch_path,evidence_patch_bytes,evidence_changed_files,evidence_insertions,evidence_deletions,evidence_clean,evidence_tests_succeeded,evidence_test_label,evidence_test_exit_code,evidence_test_duration_ms,evidence_test_output_sha256,evidence_test_log_path,review_id,review_evidence_id,review_decision,review_reason,conflict_check_id,conflict_evidence_id,conflict_target_ref,conflict_target_commit,conflict_head_commit,conflict_free,conflict_disposition,conflicting_paths_count,conflicts_sha256,artifact_id,verification_id,target_artifact_id,final_artifact_ids,scheduler_job_id,scheduler_priority,scheduler_dependencies,scheduler_not_before_ms,scheduler_deadline_ms,scheduler_attempt_timeout_ms,scheduler_lease_duration_ms,scheduler_max_dispatches,scheduler_max_consecutive_failures,scheduler_dispatch_id,scheduler_dispatch_ordinal,scheduler_selected_candidate_id,scheduler_selection_mode,scheduler_deferred_code,scheduler_deferred_reason,scheduler_lease_id,scheduler_lease_expires_at_ms,scheduler_state_reason\n",
     );
     for event in events {
         let fields = [
@@ -1122,6 +1266,125 @@ pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
             option(&event.details.verification_id),
             option(&event.details.target_artifact_id),
             event.details.final_artifact_ids.join(";"),
+            scheduler_job_id(event),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .map(|job| json_name(&job.priority))
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .map(|job| job.dependencies.join(";"))
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .and_then(|job| job.not_before_ms)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .and_then(|job| job.deadline_ms)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .map(|job| job.attempt_timeout_ms.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .map(|job| job.lease_duration_ms.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .map(|job| job.max_dispatches.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_job
+                .as_ref()
+                .map(|job| job.max_consecutive_failures.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.dispatch_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.dispatch_ordinal.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.selected_candidate_id.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| json_name(&dispatch.selection_mode))
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_deferred
+                .as_ref()
+                .map(|deferred| json_name(&deferred.code))
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_deferred
+                .as_ref()
+                .map(|deferred| deferred.reason.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.lease_id.clone())
+                .or_else(|| {
+                    event
+                        .details
+                        .scheduler_lease
+                        .as_ref()
+                        .map(|lease| lease.lease_id.clone())
+                })
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.lease_expires_at_ms.to_string())
+                .or_else(|| {
+                    event
+                        .details
+                        .scheduler_lease
+                        .as_ref()
+                        .map(|lease| lease.lease_expires_at_ms.to_string())
+                })
+                .unwrap_or_default(),
+            event
+                .details
+                .scheduler_state_change
+                .as_ref()
+                .map(|change| change.reason.clone())
+                .unwrap_or_default(),
         ];
         output.push_str(
             &fields
@@ -1133,6 +1396,43 @@ pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
         output.push('\n');
     }
     output
+}
+
+fn scheduler_job_id(event: &ObservabilityEvent) -> String {
+    event
+        .details
+        .scheduler_job
+        .as_ref()
+        .map(|job| job.job_id.clone())
+        .or_else(|| {
+            event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.job_id.clone())
+        })
+        .or_else(|| {
+            event
+                .details
+                .scheduler_deferred
+                .as_ref()
+                .map(|deferred| deferred.job_id.clone())
+        })
+        .or_else(|| {
+            event
+                .details
+                .scheduler_state_change
+                .as_ref()
+                .map(|change| change.job_id.clone())
+        })
+        .or_else(|| {
+            event
+                .details
+                .scheduler_lease
+                .as_ref()
+                .map(|lease| lease.job_id.clone())
+        })
+        .unwrap_or_default()
 }
 
 fn summarize(events: &[ObservabilityEvent], path: &Path) -> Result<ObservabilitySummary> {
@@ -1229,6 +1529,39 @@ impl Accumulator {
                 &mut self.totals.worktree_conflict_checks,
                 1,
                 "worktree conflict check count",
+            )?,
+            ObservabilityEventType::SchedulerJobQueued => {
+                checked_add(&mut self.totals.scheduler_jobs, 1, "scheduler job count")?
+            }
+            ObservabilityEventType::SchedulerDispatchDecided => checked_add(
+                &mut self.totals.scheduler_dispatches,
+                1,
+                "scheduler dispatch count",
+            )?,
+            ObservabilityEventType::SchedulerDispatchDeferred => checked_add(
+                &mut self.totals.scheduler_deferred,
+                1,
+                "scheduler deferred count",
+            )?,
+            ObservabilityEventType::SchedulerJobPaused => checked_add(
+                &mut self.totals.scheduler_pauses,
+                1,
+                "scheduler pause count",
+            )?,
+            ObservabilityEventType::SchedulerJobCancelled => checked_add(
+                &mut self.totals.scheduler_cancellations,
+                1,
+                "scheduler cancellation count",
+            )?,
+            ObservabilityEventType::SchedulerJobTimedOut => checked_add(
+                &mut self.totals.scheduler_timeouts,
+                1,
+                "scheduler timeout count",
+            )?,
+            ObservabilityEventType::SchedulerRecoveryRequired => checked_add(
+                &mut self.totals.scheduler_recoveries,
+                1,
+                "scheduler recovery count",
             )?,
             ObservabilityEventType::ToolCallCompleted => {
                 checked_add(&mut self.totals.tool_calls, 1, "tool call count")?
@@ -1336,7 +1669,14 @@ struct TraceIndexes {
     terminal_runs: BTreeSet<String>,
     artifacts: BTreeMap<String, (String, String, String)>,
     verifications: BTreeSet<String>,
-    route_decisions: BTreeMap<String, (String, String, ExecutionIdentity)>,
+    route_decisions: BTreeMap<String, (String, String, ExecutionIdentity, Option<String>)>,
+    scheduler_jobs: BTreeMap<String, (String, String)>,
+    scheduler_runs: BTreeMap<String, String>,
+    scheduler_dispatches: BTreeMap<String, (String, String, String)>,
+    scheduler_leases: BTreeMap<String, (String, String, u64)>,
+    scheduler_paused: BTreeSet<String>,
+    scheduler_terminal_jobs: BTreeSet<String>,
+    scheduler_recovery_required: BTreeSet<String>,
     worktrees: BTreeMap<String, (String, String, String, ExecutionIdentity)>,
     worktree_evidence: BTreeMap<String, (String, String, String, String)>,
     worktree_reviews: BTreeSet<String>,
@@ -1375,6 +1715,20 @@ fn verify_events(events: &[ObservabilityEvent]) -> Result<TraceIndexes> {
                 .insert(run_id.clone(), event.timestamp_ms);
         }
         verify_links(event, &mut indexes)?;
+    }
+    for (attempt_id, (_, run_id)) in &indexes.attempts {
+        if indexes.scheduler_runs.contains_key(run_id)
+            && !indexes
+                .scheduler_dispatches
+                .values()
+                .any(|(_, dispatched_attempt, _)| dispatched_attempt == attempt_id)
+        {
+            bail!(
+                "scheduled run '{}' attempt '{}' has no atomic scheduler dispatch",
+                run_id,
+                attempt_id
+            );
+        }
     }
     Ok(indexes)
 }
@@ -1496,7 +1850,12 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
                 .route_decisions
                 .insert(
                     event.event_id.clone(),
-                    (task.to_owned(), run.to_owned(), event.identity.clone()),
+                    (
+                        task.to_owned(),
+                        run.to_owned(),
+                        event.identity.clone(),
+                        routing.selected_candidate_id.clone(),
+                    ),
                 )
                 .is_some()
             {
@@ -1646,6 +2005,250 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
                     conflict.check_id
                 );
             }
+        }
+        ObservabilityEventType::SchedulerJobQueued => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let job = event
+                .details
+                .scheduler_job
+                .as_ref()
+                .context("scheduler_job_queued is missing details")?;
+            if indexes.scheduler_terminal_jobs.contains(&job.job_id)
+                || indexes
+                    .scheduler_jobs
+                    .insert(job.job_id.clone(), (task.to_owned(), run.to_owned()))
+                    .is_some()
+            {
+                bail!("scheduler jobId '{}' is queued more than once", job.job_id);
+            }
+            if indexes
+                .scheduler_runs
+                .insert(run.to_owned(), job.job_id.clone())
+                .is_some()
+            {
+                bail!("runId '{}' is assigned to more than one scheduler job", run);
+            }
+            for dependency in &job.dependencies {
+                if !indexes.scheduler_jobs.contains_key(dependency) {
+                    bail!(
+                        "event {} references missing or future scheduler dependency '{}'",
+                        event.event_id,
+                        dependency
+                    );
+                }
+            }
+        }
+        ObservabilityEventType::SchedulerDispatchDecided => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let attempt = verify_attempt_link(event, indexes, task, run)?;
+            let dispatch = event
+                .details
+                .scheduler_dispatch
+                .as_ref()
+                .context("scheduler_dispatch_decided is missing details")?;
+            let owner = indexes
+                .scheduler_jobs
+                .get(&dispatch.job_id)
+                .with_context(|| {
+                    format!(
+                        "event {} references unknown scheduler jobId '{}'",
+                        event.event_id, dispatch.job_id
+                    )
+                })?;
+            if owner != &(task.to_owned(), run.to_owned()) {
+                bail!(
+                    "event {} scheduler job belongs to another run",
+                    event.event_id
+                );
+            }
+            if indexes.scheduler_paused.contains(&dispatch.job_id)
+                || indexes.scheduler_terminal_jobs.contains(&dispatch.job_id)
+            {
+                bail!(
+                    "event {} dispatches an inactive scheduler job",
+                    event.event_id
+                );
+            }
+            let route = indexes
+                .route_decisions
+                .get(&dispatch.route_decision_id)
+                .with_context(|| {
+                    format!(
+                        "event {} references unknown scheduler route decision '{}'",
+                        event.event_id, dispatch.route_decision_id
+                    )
+                })?;
+            if route.0 != task
+                || route.1 != run
+                || route.2 != event.identity
+                || route.3.as_deref() != Some(dispatch.selected_candidate_id.as_str())
+            {
+                bail!(
+                    "event {} scheduler dispatch disagrees with its route decision",
+                    event.event_id
+                );
+            }
+            let expected_ordinal = indexes
+                .scheduler_dispatches
+                .values()
+                .filter(|(job_id, _, _)| job_id == &dispatch.job_id)
+                .count()
+                .saturating_add(1);
+            if usize::try_from(dispatch.dispatch_ordinal).ok() != Some(expected_ordinal) {
+                bail!(
+                    "event {} scheduler dispatch ordinal is not monotonic",
+                    event.event_id
+                );
+            }
+            if indexes
+                .scheduler_dispatches
+                .insert(
+                    dispatch.dispatch_id.clone(),
+                    (
+                        dispatch.job_id.clone(),
+                        attempt.to_owned(),
+                        dispatch.lease_id.clone(),
+                    ),
+                )
+                .is_some()
+            {
+                bail!(
+                    "scheduler dispatchId '{}' is recorded more than once",
+                    dispatch.dispatch_id
+                );
+            }
+            if indexes
+                .scheduler_leases
+                .insert(
+                    dispatch.lease_id.clone(),
+                    (
+                        dispatch.job_id.clone(),
+                        dispatch.dispatch_id.clone(),
+                        dispatch.lease_expires_at_ms,
+                    ),
+                )
+                .is_some()
+            {
+                bail!(
+                    "scheduler leaseId '{}' is recorded more than once",
+                    dispatch.lease_id
+                );
+            }
+            indexes.scheduler_recovery_required.remove(&dispatch.job_id);
+        }
+        ObservabilityEventType::SchedulerDispatchDeferred => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let deferred = event
+                .details
+                .scheduler_deferred
+                .as_ref()
+                .context("scheduler_dispatch_deferred is missing details")?;
+            verify_scheduler_job_owner(event, indexes, &deferred.job_id, task, run)?;
+            if let Some(route_decision_id) = &deferred.route_decision_id {
+                let route = indexes
+                    .route_decisions
+                    .get(route_decision_id)
+                    .with_context(|| {
+                        format!(
+                            "event {} references unknown routeDecisionId '{}'",
+                            event.event_id, route_decision_id
+                        )
+                    })?;
+                if route.0 != task || route.1 != run {
+                    bail!(
+                        "event {} deferred route decision belongs to another run",
+                        event.event_id
+                    );
+                }
+            }
+        }
+        ObservabilityEventType::SchedulerJobPaused
+        | ObservabilityEventType::SchedulerJobResumed
+        | ObservabilityEventType::SchedulerJobCancelled
+        | ObservabilityEventType::SchedulerJobTimedOut
+        | ObservabilityEventType::SchedulerRecoveryRequired
+        | ObservabilityEventType::SchedulerRecoveryResolved => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let change = event
+                .details
+                .scheduler_state_change
+                .as_ref()
+                .context("scheduler state event is missing details")?;
+            verify_scheduler_job_owner(event, indexes, &change.job_id, task, run)?;
+            match event.event_type {
+                ObservabilityEventType::SchedulerJobPaused => {
+                    if indexes.scheduler_terminal_jobs.contains(&change.job_id)
+                        || !indexes.scheduler_paused.insert(change.job_id.clone())
+                    {
+                        bail!("scheduler job '{}' cannot be paused", change.job_id);
+                    }
+                }
+                ObservabilityEventType::SchedulerJobResumed => {
+                    if !indexes.scheduler_paused.remove(&change.job_id)
+                        || indexes.scheduler_terminal_jobs.contains(&change.job_id)
+                    {
+                        bail!("scheduler job '{}' is not resumable", change.job_id);
+                    }
+                }
+                ObservabilityEventType::SchedulerJobCancelled
+                | ObservabilityEventType::SchedulerJobTimedOut => {
+                    if !indexes
+                        .scheduler_terminal_jobs
+                        .insert(change.job_id.clone())
+                    {
+                        bail!("scheduler job '{}' is already terminal", change.job_id);
+                    }
+                    indexes.scheduler_paused.remove(&change.job_id);
+                }
+                ObservabilityEventType::SchedulerRecoveryRequired => {
+                    if indexes.scheduler_terminal_jobs.contains(&change.job_id)
+                        || !indexes
+                            .scheduler_recovery_required
+                            .insert(change.job_id.clone())
+                    {
+                        bail!(
+                            "scheduler job '{}' already requires recovery",
+                            change.job_id
+                        );
+                    }
+                }
+                ObservabilityEventType::SchedulerRecoveryResolved => {
+                    if !indexes.scheduler_recovery_required.remove(&change.job_id)
+                        || indexes.scheduler_terminal_jobs.contains(&change.job_id)
+                    {
+                        bail!(
+                            "scheduler job '{}' does not require recovery",
+                            change.job_id
+                        );
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        ObservabilityEventType::SchedulerLeaseRenewed => {
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            let lease = event
+                .details
+                .scheduler_lease
+                .as_ref()
+                .context("scheduler_lease_renewed is missing details")?;
+            verify_scheduler_job_owner(event, indexes, &lease.job_id, task, run)?;
+            let current = indexes
+                .scheduler_leases
+                .get_mut(&lease.lease_id)
+                .with_context(|| {
+                    format!(
+                        "event {} references unknown scheduler leaseId '{}'",
+                        event.event_id, lease.lease_id
+                    )
+                })?;
+            if current.0 != lease.job_id
+                || current.1 != lease.dispatch_id
+                || current.2 != lease.previous_expires_at_ms
+            {
+                bail!("event {} scheduler lease renewal is stale", event.event_id);
+            }
+            current.2 = lease.lease_expires_at_ms;
         }
         ObservabilityEventType::AttemptCompleted
         | ObservabilityEventType::AttemptFailed
@@ -1825,6 +2428,29 @@ fn verify_attempt_link<'a>(
     Ok(attempt)
 }
 
+fn verify_scheduler_job_owner(
+    event: &ObservabilityEvent,
+    indexes: &TraceIndexes,
+    job_id: &str,
+    task: &str,
+    run: &str,
+) -> Result<()> {
+    let owner = indexes.scheduler_jobs.get(job_id).with_context(|| {
+        format!(
+            "event {} references unknown scheduler jobId '{}'",
+            event.event_id, job_id
+        )
+    })?;
+    if owner != &(task.to_owned(), run.to_owned()) {
+        bail!(
+            "event {} scheduler jobId '{}' belongs to another task/run",
+            event.event_id,
+            job_id
+        );
+    }
+    Ok(())
+}
+
 fn verify_optional_thread(
     event: &ObservabilityEvent,
     threads: &BTreeMap<String, (String, String)>,
@@ -1920,7 +2546,7 @@ fn verify_route_decision_link(
     let Some(route_decision_id) = &event.details.route_decision_id else {
         return Ok(());
     };
-    let (owner_task, owner_run, selected_identity) = indexes
+    let (owner_task, owner_run, selected_identity, _) = indexes
         .route_decisions
         .get(route_decision_id)
         .with_context(|| {
@@ -2199,6 +2825,131 @@ fn validate_event_details(event: &ObservabilityEvent) -> Result<()> {
             );
         }
     }
+    if let Some(job) = &details.scheduler_job {
+        if event.event_type != ObservabilityEventType::SchedulerJobQueued {
+            bail!(
+                "event {} schedulerJob requires scheduler_job_queued",
+                event.event_id
+            );
+        }
+        validate_scheduler_job(job)?;
+        if event.trace.run_id.as_deref() != Some(job.run_id.as_str()) {
+            bail!(
+                "event {} scheduler job runId differs from trace",
+                event.event_id
+            );
+        }
+    }
+    if let Some(dispatch) = &details.scheduler_dispatch {
+        if event.event_type != ObservabilityEventType::SchedulerDispatchDecided {
+            bail!(
+                "event {} schedulerDispatch requires scheduler_dispatch_decided",
+                event.event_id
+            );
+        }
+        for (name, value) in [
+            ("details.schedulerDispatch.jobId", dispatch.job_id.as_str()),
+            (
+                "details.schedulerDispatch.dispatchId",
+                dispatch.dispatch_id.as_str(),
+            ),
+            (
+                "details.schedulerDispatch.attemptId",
+                dispatch.attempt_id.as_str(),
+            ),
+            (
+                "details.schedulerDispatch.routeDecisionId",
+                dispatch.route_decision_id.as_str(),
+            ),
+            (
+                "details.schedulerDispatch.leaseId",
+                dispatch.lease_id.as_str(),
+            ),
+            (
+                "details.schedulerDispatch.selectedCandidateId",
+                dispatch.selected_candidate_id.as_str(),
+            ),
+        ] {
+            validate_identifier(name, value)?;
+        }
+        if dispatch.dispatch_ordinal == 0
+            || dispatch.lease_expires_at_ms <= dispatch.leased_at_ms
+            || event.trace.attempt_id.as_deref() != Some(dispatch.attempt_id.as_str())
+        {
+            bail!(
+                "event {} has invalid scheduler dispatch bounds",
+                event.event_id
+            );
+        }
+        validate_route_texts(
+            event,
+            "details.schedulerDispatch.schedulerRejections",
+            &dispatch.scheduler_rejections,
+        )?;
+    }
+    if let Some(deferred) = &details.scheduler_deferred {
+        if event.event_type != ObservabilityEventType::SchedulerDispatchDeferred {
+            bail!(
+                "event {} schedulerDeferred requires scheduler_dispatch_deferred",
+                event.event_id
+            );
+        }
+        validate_identifier("details.schedulerDeferred.jobId", &deferred.job_id)?;
+        validate_identifier(
+            "details.schedulerDeferred.decisionId",
+            &deferred.decision_id,
+        )?;
+        if let Some(route_decision_id) = &deferred.route_decision_id {
+            validate_identifier(
+                "details.schedulerDeferred.routeDecisionId",
+                route_decision_id,
+            )?;
+        }
+        validate_long_text("details.schedulerDeferred.reason", &deferred.reason, false)?;
+    }
+    if let Some(change) = &details.scheduler_state_change {
+        if !matches!(
+            event.event_type,
+            ObservabilityEventType::SchedulerJobPaused
+                | ObservabilityEventType::SchedulerJobResumed
+                | ObservabilityEventType::SchedulerJobCancelled
+                | ObservabilityEventType::SchedulerJobTimedOut
+                | ObservabilityEventType::SchedulerRecoveryRequired
+                | ObservabilityEventType::SchedulerRecoveryResolved
+        ) {
+            bail!(
+                "event {} schedulerStateChange is invalid for this event type",
+                event.event_id
+            );
+        }
+        validate_identifier("details.schedulerStateChange.jobId", &change.job_id)?;
+        validate_long_text("details.schedulerStateChange.reason", &change.reason, false)?;
+    }
+    if let Some(lease) = &details.scheduler_lease {
+        if event.event_type != ObservabilityEventType::SchedulerLeaseRenewed {
+            bail!(
+                "event {} schedulerLease requires scheduler_lease_renewed",
+                event.event_id
+            );
+        }
+        for (name, value) in [
+            ("details.schedulerLease.jobId", lease.job_id.as_str()),
+            (
+                "details.schedulerLease.dispatchId",
+                lease.dispatch_id.as_str(),
+            ),
+            ("details.schedulerLease.leaseId", lease.lease_id.as_str()),
+        ] {
+            validate_identifier(name, value)?;
+        }
+        if lease.lease_expires_at_ms <= lease.previous_expires_at_ms {
+            bail!(
+                "event {} scheduler lease must extend expiry",
+                event.event_id
+            );
+        }
+        validate_long_text("details.schedulerLease.reason", &lease.reason, false)?;
+    }
     for (name, value, expected_type) in [
         (
             "details.artifactId",
@@ -2425,6 +3176,10 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
             | Type::WorktreeEvidenceRecorded
             | Type::WorktreeReviewRecorded
             | Type::WorktreeConflictChecked
+            | Type::SchedulerDispatchDecided
+            | Type::SchedulerLeaseRenewed
+            | Type::SchedulerRecoveryRequired
+            | Type::SchedulerRecoveryResolved
             | Type::AttemptCompleted
             | Type::AttemptFailed
             | Type::ToolCallCompleted
@@ -2471,6 +3226,56 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
             event.details.worktree_conflict.is_some(),
             "worktreeConflict",
         ),
+        (
+            Type::SchedulerJobQueued,
+            event.details.scheduler_job.is_some(),
+            "schedulerJob",
+        ),
+        (
+            Type::SchedulerDispatchDecided,
+            event.details.scheduler_dispatch.is_some(),
+            "schedulerDispatch",
+        ),
+        (
+            Type::SchedulerDispatchDeferred,
+            event.details.scheduler_deferred.is_some(),
+            "schedulerDeferred",
+        ),
+        (
+            Type::SchedulerJobPaused,
+            event.details.scheduler_state_change.is_some(),
+            "schedulerStateChange",
+        ),
+        (
+            Type::SchedulerJobResumed,
+            event.details.scheduler_state_change.is_some(),
+            "schedulerStateChange",
+        ),
+        (
+            Type::SchedulerJobCancelled,
+            event.details.scheduler_state_change.is_some(),
+            "schedulerStateChange",
+        ),
+        (
+            Type::SchedulerJobTimedOut,
+            event.details.scheduler_state_change.is_some(),
+            "schedulerStateChange",
+        ),
+        (
+            Type::SchedulerLeaseRenewed,
+            event.details.scheduler_lease.is_some(),
+            "schedulerLease",
+        ),
+        (
+            Type::SchedulerRecoveryRequired,
+            event.details.scheduler_state_change.is_some(),
+            "schedulerStateChange",
+        ),
+        (
+            Type::SchedulerRecoveryResolved,
+            event.details.scheduler_state_change.is_some(),
+            "schedulerStateChange",
+        ),
     ] {
         if event.event_type == event_type && !present {
             bail!("event {} requires {name} details", event.event_id);
@@ -2493,6 +3298,38 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
         if event.health.is_none() {
             bail!("event {} requires a health snapshot", event.event_id);
         }
+    }
+    if matches!(
+        event.event_type,
+        Type::SchedulerJobQueued
+            | Type::SchedulerDispatchDecided
+            | Type::SchedulerDispatchDeferred
+            | Type::SchedulerJobPaused
+            | Type::SchedulerJobResumed
+            | Type::SchedulerJobCancelled
+            | Type::SchedulerJobTimedOut
+            | Type::SchedulerLeaseRenewed
+            | Type::SchedulerRecoveryRequired
+            | Type::SchedulerRecoveryResolved
+    ) {
+        required("taskId", event.trace.task_id.as_deref())?;
+        required("runId", event.trace.run_id.as_deref())?;
+    }
+    let scheduler_status_ok = match event.event_type {
+        Type::SchedulerJobQueued => event.status == ObservabilityStatus::Started,
+        Type::SchedulerDispatchDecided => event.status == ObservabilityStatus::Succeeded,
+        Type::SchedulerDispatchDeferred
+        | Type::SchedulerJobPaused
+        | Type::SchedulerRecoveryRequired => event.status == ObservabilityStatus::Degraded,
+        Type::SchedulerJobResumed
+        | Type::SchedulerLeaseRenewed
+        | Type::SchedulerRecoveryResolved => event.status == ObservabilityStatus::Running,
+        Type::SchedulerJobCancelled => event.status == ObservabilityStatus::Cancelled,
+        Type::SchedulerJobTimedOut => event.status == ObservabilityStatus::TimedOut,
+        _ => true,
+    };
+    if !scheduler_status_ok {
+        bail!("event {} has invalid scheduler status", event.event_id);
     }
     let requires_failure = matches!(
         event.event_type,
@@ -2532,6 +3369,85 @@ fn validate_event_shape(event: &ObservabilityEvent) -> Result<()> {
             event.event_id
         );
     }
+    Ok(())
+}
+
+fn non_empty_env_path(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn prepare_store_parent(path: &Path) -> Result<&Path> {
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .context("observability store path has no parent directory")?;
+    let existed = parent.exists();
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    if !existed {
+        secure_directory(parent)?;
+    }
+    Ok(parent)
+}
+
+fn store_lock_path(path: &Path) -> Result<PathBuf> {
+    let mut name = path
+        .file_name()
+        .context("observability store path has no filename")?
+        .to_os_string();
+    name.push(".lock");
+    Ok(prepare_store_parent(path)?.join(name))
+}
+
+fn open_store_lock(path: &Path) -> Result<File> {
+    let lock_path = store_lock_path(path)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    secure_file(&lock)?;
+    Ok(lock)
+}
+
+fn write_events_atomic(parent: &Path, path: &Path, events: &[ObservabilityEvent]) -> Result<()> {
+    let mut temp = NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "failed to create observability transaction in {}",
+            parent.display()
+        )
+    })?;
+    secure_file(temp.as_file())?;
+    for event in events {
+        serde_json::to_writer(&mut temp, event)?;
+        temp.write_all(b"\n")?;
+    }
+    temp.as_file()
+        .sync_all()
+        .context("failed to sync observability transaction")?;
+    temp.persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| {
+            format!(
+                "failed to atomically replace observability store {}",
+                path.display()
+            )
+        })?;
+    sync_directory(parent)
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?
+        .sync_all()
+        .with_context(|| format!("failed to sync {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())
 }
 
@@ -2594,6 +3510,8 @@ fn ensure_exists(name: &str, value: &str, values: &BTreeSet<String>, event_id: &
 fn validate_identifier(name: &str, value: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 160
+        || contains_obvious_secret(value)
+        || contains_obvious_local_path(value)
         || !value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "._:-/@".contains(character))
@@ -2617,6 +3535,68 @@ fn validate_label(name: &str, value: &str) -> Result<()> {
         bail!("{name} appears to contain a secret");
     }
     Ok(())
+}
+
+fn validate_scheduler_job(job: &SchedulerJobSpec) -> Result<()> {
+    if job.schema_version != SCHEDULER_JOB_SCHEMA_VERSION {
+        bail!(
+            "scheduler job uses unsupported schemaVersion '{}'",
+            job.schema_version
+        );
+    }
+    validate_identifier("schedulerJob.jobId", &job.job_id)?;
+    validate_identifier("schedulerJob.runId", &job.run_id)?;
+    if job.dependencies.len() > 128 || job.candidate_preference.len() > 64 {
+        bail!("scheduler job has too many dependencies or candidate preferences");
+    }
+    let mut dependencies = BTreeSet::new();
+    for dependency in &job.dependencies {
+        validate_identifier("schedulerJob.dependencies", dependency)?;
+        if dependency == &job.job_id || !dependencies.insert(dependency) {
+            bail!("scheduler job has a self or duplicate dependency");
+        }
+    }
+    let mut candidates = BTreeSet::new();
+    for candidate in &job.candidate_preference {
+        validate_identifier("schedulerJob.candidatePreference", candidate)?;
+        if !candidates.insert(candidate) {
+            bail!("scheduler job repeats a candidate preference");
+        }
+    }
+    if job.attempt_timeout_ms == 0
+        || job.lease_duration_ms == 0
+        || job.max_dispatches == 0
+        || job.max_consecutive_failures == 0
+    {
+        bail!("scheduler job timeout, lease, and dispatch limits must be positive");
+    }
+    if job.lease_duration_ms > job.attempt_timeout_ms {
+        bail!("scheduler job leaseDurationMs cannot exceed attemptTimeoutMs");
+    }
+    if job
+        .not_before_ms
+        .zip(job.deadline_ms)
+        .is_some_and(|(start, deadline)| start >= deadline)
+    {
+        bail!("scheduler job notBeforeMs must precede deadlineMs");
+    }
+    if let Some(budget) = &job.budget {
+        if budget.max_total_tokens.is_none()
+            && budget.max_duration_ms.is_none()
+            && budget.max_cost_microusd.is_none()
+            && budget.max_attempts.is_none()
+        {
+            bail!("scheduler job budget has no limits");
+        }
+        if budget.max_total_tokens == Some(0)
+            || budget.max_duration_ms == Some(0)
+            || budget.max_cost_microusd == Some(0)
+            || budget.max_attempts == Some(0)
+        {
+            bail!("scheduler job budget limits must be positive");
+        }
+    }
+    job.route_request.validate()
 }
 
 fn validate_long_text(name: &str, value: &str, allow_local_path: bool) -> Result<()> {
@@ -2680,12 +3660,24 @@ fn validate_route_texts(event: &ObservabilityEvent, name: &str, values: &[String
 fn contains_obvious_secret(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.contains("authorization: bearer")
+        || lower.contains("authorization=bearer")
+        || lower.contains("password=")
+        || lower.contains("client_secret=")
+        || lower.contains("secret_access_key=")
+        || lower.contains("cookie:")
+        || lower.contains("set-cookie:")
         || lower.contains("api_key=")
         || lower.contains("apikey=")
         || lower.contains("access_token=")
         || lower.contains("refresh_token=")
         || lower.split_whitespace().any(|part| {
-            (part.starts_with("sk-") || part.starts_with("ghp_") || part.starts_with("github_pat_"))
+            (part.starts_with("sk-")
+                || part.starts_with("ghp_")
+                || part.starts_with("github_pat_")
+                || part.starts_with("xox")
+                || part.starts_with("akia")
+                || part.starts_with("aiza")
+                || part.starts_with("eyj"))
                 && part.len() > 16
         })
 }
@@ -2756,6 +3748,21 @@ fn event_text_values(event: &ObservabilityEvent) -> impl Iterator<Item = &str> {
             .worktree_evidence
             .as_ref()
             .map(|evidence| evidence.test_log_path.as_str()),
+        event
+            .details
+            .scheduler_deferred
+            .as_ref()
+            .map(|deferred| deferred.reason.as_str()),
+        event
+            .details
+            .scheduler_state_change
+            .as_ref()
+            .map(|change| change.reason.as_str()),
+        event
+            .details
+            .scheduler_lease
+            .as_ref()
+            .map(|lease| lease.reason.as_str()),
         event.details.artifact_id.as_deref(),
         event.details.verification_id.as_deref(),
         event.details.target_artifact_id.as_deref(),
@@ -2811,13 +3818,22 @@ fn json_name(value: &impl Serialize) -> String {
 }
 
 fn csv_cell(value: &str) -> String {
-    if value
+    let safe = if value
+        .chars()
+        .next()
+        .is_some_and(|character| matches!(character, '=' | '+' | '-' | '@' | '\t' | '\r'))
+    {
+        format!("'{value}")
+    } else {
+        value.to_owned()
+    };
+    if safe
         .chars()
         .any(|character| matches!(character, ',' | '"' | '\r' | '\n'))
     {
-        format!("\"{}\"", value.replace('"', "\"\""))
+        format!("\"{}\"", safe.replace('"', "\"\""))
     } else {
-        value.to_owned()
+        safe
     }
 }
 
@@ -2858,6 +3874,16 @@ fn secure_file(_file: &File) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn csv_cells_neutralize_spreadsheet_formulas() {
+        assert_eq!(
+            csv_cell("=HYPERLINK(\"https://invalid\")"),
+            "\"'=HYPERLINK(\"\"https://invalid\"\")\""
+        );
+        assert_eq!(csv_cell("+SUM(1,2)"), "\"'+SUM(1,2)\"");
+        assert_eq!(csv_cell("normal"), "normal");
+    }
 
     fn event(
         id: &str,
@@ -3091,6 +4117,9 @@ mod tests {
         assert!(csv.contains("gpt-test,100,40,60"));
         assert!(csv.contains(
             "route_reason,route_decision_id,routing_request_id,routing_policy_id,routing_evaluated_at_timestamp_ms,routing_observed_event_count,routing_task_kind,routing_context_tokens,routing_output_tokens,routing_required_capabilities,routing_preferred_specialties"
+        ));
+        assert!(csv.contains(
+            "scheduler_max_dispatches,scheduler_max_consecutive_failures,scheduler_dispatch_id"
         ));
     }
 }

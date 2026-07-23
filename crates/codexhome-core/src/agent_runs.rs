@@ -580,7 +580,7 @@ pub fn generate_id(prefix: &str) -> String {
     )
 }
 
-fn now_ms() -> Result<u64> {
+pub(crate) fn now_ms() -> Result<u64> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before UNIX epoch")?
@@ -588,7 +588,7 @@ fn now_ms() -> Result<u64> {
     u64::try_from(millis).context("timestamp does not fit in u64")
 }
 
-fn build_action_event(
+pub(crate) fn build_action_event(
     report: &AgentRunReport,
     action: &AgentRunAction,
     event_id: String,
@@ -1289,7 +1289,10 @@ fn base_event(
     }
 }
 
-fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<AgentRunReport> {
+pub(crate) fn project_agent_runs(
+    events: &[ObservabilityEvent],
+    path: &Path,
+) -> Result<AgentRunReport> {
     let mut tasks = BTreeMap::<String, AgentTaskView>::new();
     let mut runs = BTreeMap::<String, AgentRunView>::new();
     let mut as_of = None;
@@ -1563,7 +1566,17 @@ fn project_agent_runs(events: &[ObservabilityEvent], path: &Path) -> Result<Agen
             ObservabilityEventType::QuotaSnapshot
             | ObservabilityEventType::RateLimited
             | ObservabilityEventType::AuthInvalid
-            | ObservabilityEventType::HomeHealth => {}
+            | ObservabilityEventType::HomeHealth
+            | ObservabilityEventType::SchedulerJobQueued
+            | ObservabilityEventType::SchedulerDispatchDecided
+            | ObservabilityEventType::SchedulerDispatchDeferred
+            | ObservabilityEventType::SchedulerJobPaused
+            | ObservabilityEventType::SchedulerJobResumed
+            | ObservabilityEventType::SchedulerJobCancelled
+            | ObservabilityEventType::SchedulerJobTimedOut
+            | ObservabilityEventType::SchedulerLeaseRenewed
+            | ObservabilityEventType::SchedulerRecoveryRequired
+            | ObservabilityEventType::SchedulerRecoveryResolved => {}
         }
     }
 

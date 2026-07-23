@@ -24,6 +24,11 @@ All notable changes to this project will be documented in this file.
 - Independent main-Home review and target-branch conflict gates before Run completion.
 - Explicit `human_required` and `replan_requested` conflict dispositions.
 - Versioned worktree plan, evidence, conflict, event, Run, and summary schema coverage.
+- Durable append-only Scheduler jobs with priority, dependencies, time windows, budgets, and cancellation.
+- Atomic route, Attempt, dispatch, and lease transactions with Home/model/global concurrency gates.
+- Explainable preferred/fallback routing for offline, rate-limited, quota-limited, and over-budget identities.
+- Lease renewal, expired-worker recovery, retry/migration lineage, and automatic safety pauses.
+- Versioned `schedule` CLI commands, JSON contracts, CSV columns, schemas, examples, and operator documentation.
 
 ### Security
 
@@ -35,6 +40,11 @@ All notable changes to this project will be documented in this file.
 - Linked Attempts must match the Home, account, and model selected by their route decision.
 - Worktree self-review is rejected; child output cannot be accepted without a different reviewer Home.
 - Worktree creation rejects existing paths/branches and rolls back if event recording fails.
+- Scheduler jobs cannot persist prompts, responses, credentials, environment dumps, raw commands, or arbitrary payloads.
+- Concurrent dispatchers serialize under the observability-store lock so one job cannot be claimed twice.
+- Multi-event mutations use a stable sidecar lock and atomic fsynced JSONL replacement to prevent partial dispatch traces.
+- Scheduler operator notes are restricted to bounded reason codes; Route metadata is restricted to safe identifiers.
+- CSV exports neutralize spreadsheet formula prefixes before quoting cells.
 
 ## [0.2.0-alpha.1]
 

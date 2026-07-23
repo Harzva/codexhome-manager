@@ -11,6 +11,7 @@ mod home;
 mod observability;
 mod registry;
 mod router;
+mod scheduler;
 mod worktree;
 
 pub use agent_runs::{
@@ -29,10 +30,13 @@ pub use observability::{
     ObservabilityFilter, ObservabilityGroup, ObservabilityStatus, ObservabilityStore,
     ObservabilitySummary, ObservabilityTotals, ObservabilityVerifyReport,
     RouteCandidateDecisionSnapshot, RouteDecisionDetails, RouteScoreSnapshot, RunBudget,
+    SchedulerDeferredCode, SchedulerDeferredDetails, SchedulerDispatchDetails, SchedulerJobSpec,
+    SchedulerLeaseDetails, SchedulerPriority, SchedulerSelectionMode, SchedulerStateChangeDetails,
     TaskDescriptor, TraceContext, UsageDelta, WorktreeConflictDetails, WorktreeConflictDisposition,
     WorktreeEvidenceDetails, WorktreePreparedDetails, WorktreeReviewDecision,
     WorktreeReviewDetails, OBSERVABILITY_EVENT_SCHEMA_VERSION, OBSERVABILITY_EXPORT_SCHEMA_VERSION,
     OBSERVABILITY_SUMMARY_SCHEMA_VERSION, OBSERVABILITY_VERIFY_SCHEMA_VERSION,
+    SCHEDULER_JOB_SCHEMA_VERSION,
 };
 pub use registry::{
     normalize_alias, normalize_specialties, RegisteredHomeView, Registry, RegistryEntry,
@@ -44,6 +48,14 @@ pub use router::{
     RouteRequest, RouteScoreComponent, RouteScoreWeights, RouteSelection, RouteTaskKind,
     RouteTaskRule, ROUTE_DECISION_SCHEMA_VERSION, ROUTE_POLICY_SCHEMA_VERSION,
     ROUTE_REQUEST_SCHEMA_VERSION,
+};
+pub use scheduler::{
+    parse_scheduler_job, SchedulerBudgetState, SchedulerConcurrencyLimit, SchedulerDeferredView,
+    SchedulerDispatchReport, SchedulerDispatchView, SchedulerEligibility, SchedulerJobStatus,
+    SchedulerJobView, SchedulerMutationReport, SchedulerPolicy, SchedulerPolicyStore,
+    SchedulerReport, SchedulerStore, SchedulerTickReport, SCHEDULER_DISPATCH_SCHEMA_VERSION,
+    SCHEDULER_MUTATION_SCHEMA_VERSION, SCHEDULER_POLICY_SCHEMA_VERSION,
+    SCHEDULER_REPORT_SCHEMA_VERSION, SCHEDULER_TICK_SCHEMA_VERSION,
 };
 pub use worktree::{
     GitWorktreeManager, WorktreeAssignment, WorktreeConflictOptions, WorktreeConflictReport,

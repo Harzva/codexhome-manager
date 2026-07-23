@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "codexhome.scheduler-job.v1",
+  "jobId": "job-example-1",
+  "runId": "replace-with-active-run-id",
+  "priority": "high",
+  "dependencies": [],
+  "notBeforeMs": null,
+  "deadlineMs": null,
+  "attemptTimeoutMs": 5400000,
+  "leaseDurationMs": 600000,
+  "maxDispatches": 4,
+  "maxConsecutiveFailures": 2,
+  "budget": {
+    "maxTotalTokens": 300000,
+    "maxDurationMs": 5400000,
+    "maxCostMicrousd": 5000000,
+    "maxAttempts": 4
+  },
+  "routeRequest": {
+    "schemaVersion": "codexhome.route-request.v1",
+    "requestId": "request-scheduler-example-1",
+    "taskKind": "architecture",
+    "estimatedContextTokens": 80000,
+    "estimatedOutputTokens": 12000,
+    "requiredCapabilities": ["coding"],
+    "preferredSpecialties": ["architecture"],
+    "sensitiveDirectory": false,
+    "requiredSecurityDomain": null,
+    "lockedHome": null,
+    "lockedModel": null,
+    "maxEstimatedCostMicrousd": 2000000,
+    "allowDegraded": false
+  },
+  "candidatePreference": ["primary-strong", "spark-local"]
+}

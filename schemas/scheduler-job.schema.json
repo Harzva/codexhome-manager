@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/scheduler-job.schema.json",
+  "title": "CodexHome Scheduler Job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "runId",
+    "priority",
+    "attemptTimeoutMs",
+    "leaseDurationMs",
+    "maxDispatches",
+    "maxConsecutiveFailures",
+    "routeRequest"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.scheduler-job.v1" },
+    "jobId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "runId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "priority": {
+      "enum": ["background", "low", "normal", "high", "critical"]
+    },
+    "dependencies": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "default": [],
+      "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+    },
+    "notBeforeMs": { "type": ["integer", "null"], "minimum": 0 },
+    "deadlineMs": { "type": ["integer", "null"], "minimum": 0 },
+    "attemptTimeoutMs": { "type": "integer", "minimum": 1 },
+    "leaseDurationMs": { "type": "integer", "minimum": 1 },
+    "maxDispatches": { "type": "integer", "minimum": 1 },
+    "maxConsecutiveFailures": { "type": "integer", "minimum": 1 },
+    "budget": {
+      "oneOf": [
+        { "$ref": "observability-event.schema.json#/$defs/runBudget" },
+        { "type": "null" }
+      ]
+    },
+    "routeRequest": { "$ref": "route-request.schema.json" },
+    "candidatePreference": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "default": [],
+      "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+    }
+  }
+}

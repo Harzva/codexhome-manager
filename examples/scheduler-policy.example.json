@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "codexhome.scheduler-policy.v1",
+  "policyId": "local-scheduler",
+  "revision": 1,
+  "maxActiveJobs": 4,
+  "defaultHomeConcurrency": 1,
+  "defaultModelConcurrency": 2,
+  "homeConcurrency": [
+    {
+      "key": "replace-with-spark-registry-id",
+      "maxActive": 2
+    }
+  ],
+  "modelConcurrency": [
+    {
+      "key": "replace-with-spark-model",
+      "maxActive": 2
+    }
+  ],
+  "maxLeaseMs": 900000
+}

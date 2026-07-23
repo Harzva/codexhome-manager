@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/scheduler-policy.schema.json",
+  "title": "CodexHome Scheduler Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "policyId", "revision"],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.scheduler-policy.v1" },
+    "policyId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "maxActiveJobs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 8
+    },
+    "defaultHomeConcurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 1
+    },
+    "defaultModelConcurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 2
+    },
+    "homeConcurrency": {
+      "type": "array",
+      "maxItems": 256,
+      "default": [],
+      "items": { "$ref": "#/$defs/concurrencyLimit" }
+    },
+    "modelConcurrency": {
+      "type": "array",
+      "maxItems": 256,
+      "default": [],
+      "items": { "$ref": "#/$defs/concurrencyLimit" }
+    },
+    "maxLeaseMs": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 86400000
+    }
+  },
+  "$defs": {
+    "concurrencyLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "maxActive"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "maxActive": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    }
+  }
+}

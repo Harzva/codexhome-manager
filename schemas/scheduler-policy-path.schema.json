@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/scheduler-policy-path.schema.json",
+  "title": "CodexHome Scheduler Policy Path",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "policyPath", "includesLocalPaths"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.scheduler-policy-path.v1" },
+    "policyPath": { "type": "string", "minLength": 1 },
+    "includesLocalPaths": { "const": true }
+  }
+}

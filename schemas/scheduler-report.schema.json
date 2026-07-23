@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/scheduler-report.schema.json",
+  "title": "CodexHome Scheduler Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "storePath",
+    "asOfTimestampMs",
+    "evaluatedAtMs",
+    "jobs",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.scheduler-report.v1" },
+    "storePath": { "type": "string", "minLength": 1 },
+    "asOfTimestampMs": { "type": ["integer", "null"], "minimum": 0 },
+    "evaluatedAtMs": { "type": "integer", "minimum": 0 },
+    "jobs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/job" }
+    },
+    "safety": { "$ref": "#/$defs/safety" }
+  },
+  "$defs": {
+    "jobStatus": {
+      "enum": [
+        "queued",
+        "waiting",
+        "ready",
+        "running",
+        "verifying",
+        "retry_ready",
+        "paused",
+        "recovery_required",
+        "needs_attention",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out"
+      ]
+    },
+    "deferredCode": {
+      "enum": [
+        "dependency_pending",
+        "dependency_failed",
+        "not_before",
+        "deadline_expired",
+        "run_not_ready",
+        "budget_exhausted",
+        "dispatch_limit",
+        "failure_threshold",
+        "global_concurrency",
+        "home_concurrency",
+        "model_concurrency",
+        "no_eligible_route",
+        "active_attempt",
+        "recovery_required"
+      ]
+    },
+    "selectionMode": {
+      "enum": ["dynamic", "preferred", "fallback"]
+    },
+    "dispatchDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "dispatchId",
+        "dispatchOrdinal",
+        "attemptId",
+        "routeDecisionId",
+        "leaseId",
+        "leasedAtMs",
+        "leaseExpiresAtMs",
+        "selectedCandidateId",
+        "selectionMode",
+        "schedulerRejections"
+      ],
+      "properties": {
+        "jobId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "dispatchId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "dispatchOrdinal": { "type": "integer", "minimum": 1 },
+        "attemptId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "routeDecisionId": {
+          "$ref": "observability-event.schema.json#/$defs/identifier"
+        },
+        "leaseId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "leasedAtMs": { "type": "integer", "minimum": 0 },
+        "leaseExpiresAtMs": { "type": "integer", "minimum": 0 },
+        "selectedCandidateId": {
+          "$ref": "observability-event.schema.json#/$defs/identifier"
+        },
+        "selectionMode": { "$ref": "#/$defs/selectionMode" },
+        "schedulerRejections": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+        }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatchedAtMs",
+        "identity",
+        "details",
+        "leaseExpiresAtMs"
+      ],
+      "properties": {
+        "dispatchedAtMs": { "type": "integer", "minimum": 0 },
+        "identity": { "$ref": "observability-event.schema.json#/$defs/identity" },
+        "details": { "$ref": "#/$defs/dispatchDetails" },
+        "leaseExpiresAtMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "deferredDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "decisionId",
+        "code",
+        "reason",
+        "nextEligibleAtMs",
+        "routeDecisionId"
+      ],
+      "properties": {
+        "jobId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "decisionId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "code": { "$ref": "#/$defs/deferredCode" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "nextEligibleAtMs": { "type": ["integer", "null"], "minimum": 0 },
+        "routeDecisionId": {
+          "oneOf": [
+            { "$ref": "observability-event.schema.json#/$defs/identifier" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "deferred": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deferredAtMs", "details"],
+      "properties": {
+        "deferredAtMs": { "type": "integer", "minimum": 0 },
+        "details": { "$ref": "#/$defs/deferredDetails" }
+      }
+    },
+    "budgetState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["withinBudget", "exhaustedDimensions"],
+      "properties": {
+        "withinBudget": { "type": "boolean" },
+        "exhaustedDimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "code", "reason", "nextEligibleAtMs"],
+      "properties": {
+        "eligible": { "type": "boolean" },
+        "code": {
+          "oneOf": [
+            { "$ref": "#/$defs/deferredCode" },
+            { "type": "null" }
+          ]
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "nextEligibleAtMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "taskId",
+        "runId",
+        "status",
+        "queuedAtMs",
+        "updatedAtMs",
+        "spec",
+        "dispatches",
+        "lastDeferred",
+        "consecutiveFailures",
+        "budgetState",
+        "eligibility",
+        "stateReason"
+      ],
+      "properties": {
+        "jobId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "taskId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "runId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "status": { "$ref": "#/$defs/jobStatus" },
+        "queuedAtMs": { "type": "integer", "minimum": 0 },
+        "updatedAtMs": { "type": "integer", "minimum": 0 },
+        "spec": { "$ref": "scheduler-job.schema.json" },
+        "dispatches": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dispatch" }
+        },
+        "lastDeferred": {
+          "oneOf": [
+            { "$ref": "#/$defs/deferred" },
+            { "type": "null" }
+          ]
+        },
+        "consecutiveFailures": { "type": "integer", "minimum": 0 },
+        "budgetState": { "$ref": "#/$defs/budgetState" },
+        "eligibility": { "$ref": "#/$defs/eligibility" },
+        "stateReason": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretsRedacted",
+        "includesSecrets",
+        "readsAuthContents",
+        "includesLocalPaths"
+      ],
+      "properties": {
+        "secretsRedacted": { "const": true },
+        "includesSecrets": { "const": false },
+        "readsAuthContents": { "const": false },
+        "includesLocalPaths": { "const": true }
+      }
+    }
+  }
+}

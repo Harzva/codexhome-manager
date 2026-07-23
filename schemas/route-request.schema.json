@@ -13,7 +13,7 @@
   ],
   "properties": {
     "schemaVersion": { "const": "codexhome.route-request.v1" },
-    "requestId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "requestId": { "$ref": "#/$defs/routingIdentifier" },
     "taskKind": { "$ref": "#/$defs/taskKind" },
     "estimatedContextTokens": { "type": "integer", "minimum": 1 },
     "estimatedOutputTokens": { "type": "integer", "minimum": 0 },
@@ -21,20 +21,18 @@
       "type": "array",
       "maxItems": 64,
       "uniqueItems": true,
-      "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+      "items": { "$ref": "#/$defs/routingIdentifier" }
     },
     "preferredSpecialties": {
       "type": "array",
       "maxItems": 64,
       "uniqueItems": true,
-      "items": { "$ref": "observability-event.schema.json#/$defs/label" }
+      "items": { "$ref": "#/$defs/routingIdentifier" }
     },
     "sensitiveDirectory": { "type": "boolean", "default": false },
-    "requiredSecurityDomain": {
-      "$ref": "observability-event.schema.json#/$defs/nullableLabel"
-    },
-    "lockedHome": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
-    "lockedModel": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+    "requiredSecurityDomain": { "$ref": "#/$defs/nullableRoutingIdentifier" },
+    "lockedHome": { "$ref": "#/$defs/nullableRoutingIdentifier" },
+    "lockedModel": { "$ref": "#/$defs/nullableRoutingIdentifier" },
     "maxEstimatedCostMicrousd": { "type": ["integer", "null"], "minimum": 1 },
     "allowDegraded": { "type": "boolean", "default": false }
   },
@@ -51,6 +49,18 @@
     }
   ],
   "$defs": {
+    "routingIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^(?![/~])(?![A-Za-z]:/)(?!.*\\.\\.)(?!.*//)[A-Za-z0-9._:@/-]+$"
+    },
+    "nullableRoutingIdentifier": {
+      "oneOf": [
+        { "$ref": "#/$defs/routingIdentifier" },
+        { "type": "null" }
+      ]
+    },
     "taskKind": {
       "enum": [
         "simple_code",

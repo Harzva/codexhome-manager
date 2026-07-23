@@ -49,6 +49,21 @@ The detailed product roadmap was developed before repository initialization. Thi
 - Run completion gate that forbids silent child-output acceptance.
 - Versioned CLI JSON, event projections, public schemas, and end-to-end tests.
 
+## v0.2.4 — Durable Scheduler control plane
+
+This milestone implements the broader CodexHome Control Plane program's v1.5
+Scheduler capability; package versions remain independent semantic-release
+versions.
+
+- Append-only queue projection sharing the Agent Run observability store.
+- Atomic Route decision, Attempt start, dispatch ownership, and lease recording.
+- Priority, dependency DAGs, `notBefore`, deadline, retry, pause, cancel, and timeout controls.
+- Layered token, duration, cost, Attempt, dispatch, and consecutive-failure budgets.
+- Global, per-Home, and per-model concurrency limits.
+- Explainable fallback for unavailable, rate-limited, quota-exhausted, or unhealthy Homes.
+- Lease renewal plus explicit expired-worker recovery before retry.
+- Versioned Scheduler job, policy, report, mutation, dispatch, tick, event, and summary schemas.
+
 ## v0.3 — Skill placement
 
 - Skill Space manifests and capacity budgets.
@@ -63,7 +78,7 @@ The detailed product roadmap was developed before repository initialization. Thi
 
 - Launch `codexhome run @agent` from the durable Run state.
 - Process capture and final-result adapters on top of isolated worktrees.
-- Timeout/cancellation signals and review-state execution adapters.
+- Translate Scheduler leases, timeout/cancellation state, and review gates into process signals.
 
 ## v0.5 — Agent Household
 

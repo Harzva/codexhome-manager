@@ -2,17 +2,19 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use codexhome_core::{
     discover, doctor, generate_id, observability_events_csv, parse_observability_events,
-    parse_route_request, AgentRunAction, AgentRunMutationReport, AgentRunReport, AgentRunStore,
-    AgentRunView, AttemptTransition, AttemptTransitionKind, CodexHomeSummary, DiscoveryOptions,
-    DiscoveryReport, ExecutionIdentity, FailureInfo, GitWorktreeManager, HomeManager,
-    HomeMutationResult, ObservabilityFilter, ObservabilityStatus, ObservabilityStore,
-    ObservabilitySummary, RegisteredHomeView, RegistryReport, RegistryStore, RouteDecision,
-    RouteEngine, RouteHomeState, RoutePolicyStore, RunBudget, SafetySummary, UsageDelta,
-    WorktreeAssignment, WorktreeConflictDisposition, WorktreeConflictOptions,
-    WorktreeEvidenceOptions, WorktreePlan, WorktreePrepareOptions, WorktreePreparedDetails,
-    WorktreeReviewDecision, WorktreeReviewDetails, WORKTREE_PLAN_SCHEMA_VERSION,
+    parse_route_request, parse_scheduler_job, AgentRunAction, AgentRunMutationReport,
+    AgentRunReport, AgentRunStore, AgentRunView, AttemptTransition, AttemptTransitionKind,
+    CodexHomeSummary, DiscoveryOptions, DiscoveryReport, ExecutionIdentity, FailureInfo,
+    GitWorktreeManager, HomeManager, HomeMutationResult, ObservabilityFilter, ObservabilityStatus,
+    ObservabilityStore, ObservabilitySummary, RegisteredHomeView, RegistryReport, RegistryStore,
+    RouteDecision, RouteEngine, RouteHomeState, RoutePolicyStore, RunBudget, SafetySummary,
+    SchedulerDispatchReport, SchedulerJobView, SchedulerMutationReport, SchedulerPolicyStore,
+    SchedulerReport, SchedulerStore, SchedulerTickReport, UsageDelta, WorktreeAssignment,
+    WorktreeConflictDisposition, WorktreeConflictOptions, WorktreeEvidenceOptions, WorktreePlan,
+    WorktreePrepareOptions, WorktreePreparedDetails, WorktreeReviewDecision, WorktreeReviewDetails,
+    WORKTREE_PLAN_SCHEMA_VERSION,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fs;
 use std::io::{self, Read};
 use std::path::PathBuf;
@@ -25,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
     version,
     about = "Discover and manage specialized Codex Homes",
     long_about = "Discover, register, and manage multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output.",
-    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome task create --label 'Compile benchmark'\n  codexhome run start task-123 --max-total-tokens 300000\n  codexhome route recommend request.json --json\n  codexhome route decide request.json --run-id run-123 --json\n  codexhome run attempt start run-123 --home-id home-main --model gpt-5.5\n  codexhome observe summary --home-id @research --json"
+    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome task create --label 'Compile benchmark'\n  codexhome run start task-123 --max-total-tokens 300000\n  codexhome route recommend request.json --json\n  codexhome route decide request.json --run-id run-123 --json\n  codexhome schedule enqueue scheduler-job.json\n  codexhome schedule dispatch --job-id job-123 --json\n  codexhome run attempt start run-123 --home-id home-main --model gpt-5.5\n  codexhome observe summary --home-id @research --json"
 )]
 struct Cli {
     /// Add a CODEX_HOME candidate without changing the active shell environment.
@@ -36,13 +38,17 @@ struct Cli {
     #[arg(long, global = true, value_name = "FILE")]
     registry: Option<PathBuf>,
 
-    /// Override the append-only observability JSONL store.
+    /// Override the append-only observability JSONL store (or set CODEXHOME_OBSERVABILITY_STORE).
     #[arg(long, global = true, value_name = "FILE")]
     observability_store: Option<PathBuf>,
 
-    /// Override the explainable routing policy file.
+    /// Override the explainable routing policy file (or set CODEXHOME_ROUTE_POLICY).
     #[arg(long, global = true, value_name = "FILE")]
     route_policy: Option<PathBuf>,
+
+    /// Override the durable scheduler policy file (or set CODEXHOME_SCHEDULER_POLICY).
+    #[arg(long, global = true, value_name = "FILE")]
+    scheduler_policy: Option<PathBuf>,
 
     /// Emit stable machine-readable JSON to stdout.
     #[arg(long, global = true)]
@@ -101,6 +107,12 @@ enum Command {
         #[command(subcommand)]
         command: RouteCommand,
     },
+
+    /// Queue, dispatch, recover, and cancel durable Agent Runs.
+    Schedule {
+        #[command(subcommand)]
+        command: ScheduleCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -122,6 +134,104 @@ enum RouteCommand {
     /// Validate the active policy and summarize its candidates and task rules.
     Validate,
     /// Print the active route policy path.
+    Path,
+}
+
+#[derive(Debug, Subcommand)]
+enum ScheduleCommand {
+    /// Enqueue a versioned scheduler job JSON document.
+    Enqueue {
+        /// Scheduler job JSON file, or - for stdin.
+        #[arg(value_name = "FILE")]
+        job: String,
+    },
+    /// List all projected scheduler jobs.
+    List,
+    /// Show one projected scheduler job.
+    Show { job_id: String },
+    /// Atomically select and lease the next eligible job.
+    Dispatch {
+        /// Dispatch this job instead of selecting the highest-priority eligible job.
+        #[arg(long)]
+        job_id: Option<String>,
+    },
+    /// Pause a queued or retryable job.
+    Pause {
+        /// Scheduler job ID returned by enqueue or list.
+        job_id: String,
+        /// Safe operational reason code, such as maintenance.
+        #[arg(long, value_name = "REASON_CODE")]
+        reason: String,
+    },
+    /// Resume a paused job.
+    Resume {
+        /// Scheduler job ID returned by enqueue or list.
+        job_id: String,
+        /// Safe operational reason code, such as capacity_restored.
+        #[arg(long, value_name = "REASON_CODE")]
+        reason: String,
+    },
+    /// Extend the active dispatch lease within policy and attempt limits.
+    Renew {
+        /// Scheduler job ID returned by dispatch.
+        job_id: String,
+        /// Active dispatch ID returned by dispatch.
+        #[arg(long)]
+        dispatch_id: String,
+        /// Active lease ID returned by dispatch.
+        #[arg(long)]
+        lease_id: String,
+        /// Milliseconds to add without exceeding policy, timeout, or duration budget.
+        #[arg(long)]
+        extension_ms: u64,
+        /// Safe operational reason code, such as worker_heartbeat.
+        #[arg(long, value_name = "REASON_CODE")]
+        reason: String,
+    },
+    /// Detect expired leases and automatically pause unsafe jobs.
+    Tick,
+    /// Close an expired attempt and make the job eligible for an explicit retry.
+    RecoverRetry {
+        /// Scheduler job ID in recovery_required state.
+        job_id: String,
+        /// Safe operational reason code.
+        #[arg(long, value_name = "REASON_CODE")]
+        reason: String,
+        #[command(flatten)]
+        usage: SchedulerUsageArgs,
+    },
+    /// Cancel a job and its active run.
+    Cancel {
+        /// Scheduler job ID to cancel.
+        job_id: String,
+        /// Safe operational reason code.
+        #[arg(long, value_name = "REASON_CODE")]
+        reason: String,
+        #[command(flatten)]
+        usage: SchedulerUsageArgs,
+    },
+    /// Time out a job and its active run.
+    Timeout {
+        /// Scheduler job ID to time out.
+        job_id: String,
+        /// Safe operational reason code.
+        #[arg(long, value_name = "REASON_CODE")]
+        reason: String,
+        #[command(flatten)]
+        usage: SchedulerUsageArgs,
+    },
+    /// Validate or locate the active scheduler policy.
+    Policy {
+        #[command(subcommand)]
+        command: SchedulePolicyCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SchedulePolicyCommand {
+    /// Validate the active scheduler policy.
+    Validate,
+    /// Print the active scheduler policy path.
     Path,
 }
 
@@ -655,6 +765,49 @@ impl From<TerminalUsageArgs> for UsageDelta {
 }
 
 #[derive(Debug, Args, Default)]
+struct SchedulerUsageArgs {
+    /// Input tokens consumed by the active Attempt, or zero when no Attempt exists.
+    #[arg(long, default_value_t = 0)]
+    input_tokens: u64,
+    /// Output tokens consumed by the active Attempt.
+    #[arg(long, default_value_t = 0)]
+    output_tokens: u64,
+    /// Cached input tokens included in input-tokens.
+    #[arg(long, default_value_t = 0)]
+    cached_input_tokens: u64,
+    /// Cache hits observed by the active Attempt.
+    #[arg(long, default_value_t = 0)]
+    cache_hits: u64,
+    /// Cache misses observed by the active Attempt.
+    #[arg(long, default_value_t = 0)]
+    cache_misses: u64,
+    /// Authoritative active Attempt duration in milliseconds.
+    #[arg(long, default_value_t = 0)]
+    duration_ms: u64,
+    /// Authoritative estimated cost in micro-USD.
+    #[arg(long, default_value_t = 0)]
+    estimated_cost_microusd: u64,
+    /// Provider or worker retries already consumed.
+    #[arg(long, default_value_t = 0)]
+    retries: u64,
+}
+
+impl From<SchedulerUsageArgs> for UsageDelta {
+    fn from(value: SchedulerUsageArgs) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cached_input_tokens: value.cached_input_tokens,
+            cache_hits: value.cache_hits,
+            cache_misses: value.cache_misses,
+            duration_ms: value.duration_ms,
+            estimated_cost_microusd: value.estimated_cost_microusd,
+            retries: value.retries,
+        }
+    }
+}
+
+#[derive(Debug, Args, Default)]
 struct ToolUsageArgs {
     #[arg(long, default_value_t = 0)]
     input_tokens: u64,
@@ -795,6 +948,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         registry,
         observability_store,
         route_policy,
+        scheduler_policy,
         json,
         command,
     } = cli;
@@ -836,6 +990,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Route { command } => {
             run_route(command, route_policy, registry, observability_store, json)
         }
+        Command::Schedule { command } => run_schedule(
+            command,
+            scheduler_policy,
+            route_policy,
+            registry,
+            observability_store,
+            json,
+        ),
     }
 }
 
@@ -1508,6 +1670,171 @@ fn apply_run_action(store: &AgentRunStore, action: AgentRunAction, json: bool) -
     output_run_mutation(&report, json)
 }
 
+fn run_schedule(
+    command: ScheduleCommand,
+    scheduler_policy_path: Option<PathBuf>,
+    route_policy_path: Option<PathBuf>,
+    registry_path: Option<PathBuf>,
+    observability_path: Option<PathBuf>,
+    json: bool,
+) -> Result<ExitCode> {
+    if let ScheduleCommand::Policy { command } = &command {
+        let policy_store = SchedulerPolicyStore::from_environment(scheduler_policy_path.clone())?;
+        match command {
+            SchedulePolicyCommand::Path => {
+                let report = json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.scheduler-policy-path.v1",
+                    "policyPath": policy_store.path().to_string_lossy(),
+                    "includesLocalPaths": true,
+                });
+                output(json, &report, || {
+                    println!("{}", policy_store.path().display())
+                })?;
+            }
+            SchedulePolicyCommand::Validate => {
+                let policy = policy_store.load()?;
+                let report = scheduler_policy_report(policy_store.path(), &policy);
+                output(json, &report, || {
+                    println!(
+                        "Scheduler policy '{}' revision {} is valid.",
+                        report["policyId"].as_str().unwrap_or("-"),
+                        report["revision"].as_u64().unwrap_or_default()
+                    );
+                    println!("{}", policy_store.path().display());
+                })?;
+            }
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let store = SchedulerStore::from_environment(observability_path)?;
+    match command {
+        ScheduleCommand::Enqueue { job } => {
+            let spec = parse_scheduler_job(&read_observability_input(&job)?)?;
+            let report = store.enqueue(spec)?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::List => {
+            let report = store.report()?;
+            output(json, &report, || print_scheduler_report(&report))?;
+        }
+        ScheduleCommand::Show { job_id } => {
+            let mut report = store.report()?;
+            let job = report.job(&job_id)?.clone();
+            report.jobs = vec![job.clone()];
+            output(json, &report, || print_scheduler_job(&job))?;
+        }
+        ScheduleCommand::Dispatch { job_id } => {
+            let scheduler_policy =
+                SchedulerPolicyStore::from_environment(scheduler_policy_path)?.load()?;
+            let route_policy = RoutePolicyStore::from_environment(route_policy_path)?.load()?;
+            let homes = registered_route_homes(registry_path)?;
+            let report =
+                store.dispatch(&scheduler_policy, &route_policy, &homes, job_id.as_deref())?;
+            output_scheduler_dispatch(&report, json)?;
+            return Ok(if report.dispatched {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            });
+        }
+        ScheduleCommand::Pause { job_id, reason } => {
+            let report = store.pause(&job_id, &reason, false)?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::Resume { job_id, reason } => {
+            let report = store.resume(&job_id, &reason)?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::Renew {
+            job_id,
+            dispatch_id,
+            lease_id,
+            extension_ms,
+            reason,
+        } => {
+            let policy = SchedulerPolicyStore::from_environment(scheduler_policy_path)?.load()?;
+            let report = store.renew_lease(
+                &policy,
+                &job_id,
+                &dispatch_id,
+                &lease_id,
+                extension_ms,
+                &reason,
+            )?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::Tick => {
+            let report = store.tick()?;
+            output_scheduler_tick(&report, json)?;
+        }
+        ScheduleCommand::RecoverRetry {
+            job_id,
+            reason,
+            usage,
+        } => {
+            let report = store.resolve_recovery_for_retry(&job_id, usage.into(), &reason)?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::Cancel {
+            job_id,
+            reason,
+            usage,
+        } => {
+            let report = store.cancel(&job_id, usage.into(), &reason)?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::Timeout {
+            job_id,
+            reason,
+            usage,
+        } => {
+            let report = store.timeout(&job_id, usage.into(), &reason)?;
+            output_scheduler_mutation(&report, json)?;
+        }
+        ScheduleCommand::Policy { .. } => unreachable!("policy commands return before store setup"),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn scheduler_policy_report(
+    path: &std::path::Path,
+    policy: &codexhome_core::SchedulerPolicy,
+) -> Value {
+    json!({
+        "ok": true,
+        "schemaVersion": "codexhome.scheduler-policy-report.v1",
+        "policyPath": path.to_string_lossy(),
+        "policyId": policy.policy_id,
+        "revision": policy.revision,
+        "maxActiveJobs": policy.max_active_jobs,
+        "defaultHomeConcurrency": policy.default_home_concurrency,
+        "defaultModelConcurrency": policy.default_model_concurrency,
+        "homeOverrideCount": policy.home_concurrency.len(),
+        "modelOverrideCount": policy.model_concurrency.len(),
+        "maxLeaseMs": policy.max_lease_ms,
+        "safety": {
+            "secretsRedacted": true,
+            "includesSecrets": false,
+            "readsAuthContents": false,
+            "includesLocalPaths": true,
+        }
+    })
+}
+
+fn registered_route_homes(registry_path: Option<PathBuf>) -> Result<Vec<RouteHomeState>> {
+    let registry = RegistryStore::from_environment(registry_path)?.report()?;
+    Ok(registry
+        .homes
+        .iter()
+        .map(|home| RouteHomeState {
+            home_id: home.entry.id.clone(),
+            home_alias: Some(home.entry.alias.clone()),
+            available: home.available,
+        })
+        .collect())
+}
+
 fn run_route(
     command: RouteCommand,
     policy_path: Option<PathBuf>,
@@ -1644,6 +1971,86 @@ fn output_run_mutation(report: &AgentRunMutationReport, json: bool) -> Result<()
             print_agent_run(run);
         }
     })
+}
+
+fn output_scheduler_mutation(report: &SchedulerMutationReport, json: bool) -> Result<()> {
+    output(json, report, || {
+        println!(
+            "{} · job={} · status={:?}",
+            report.action, report.job.job_id, report.job.status
+        );
+        print_scheduler_job(&report.job);
+        println!("Events: {}", report.event_ids.join(", "));
+    })
+}
+
+fn output_scheduler_dispatch(report: &SchedulerDispatchReport, json: bool) -> Result<()> {
+    output(json, report, || {
+        if report.dispatched {
+            let dispatch = report.job.dispatches.last();
+            println!(
+                "Dispatched job {} to {} / {}.",
+                report.job.job_id,
+                dispatch
+                    .and_then(|value| value.identity.home_id.as_deref())
+                    .unwrap_or("-"),
+                dispatch
+                    .and_then(|value| value.identity.model.as_deref())
+                    .unwrap_or("-")
+            );
+        } else {
+            println!(
+                "Deferred job {}: {}",
+                report.job.job_id, report.job.eligibility.reason
+            );
+        }
+        println!("Events: {}", report.event_ids.join(", "));
+    })
+}
+
+fn output_scheduler_tick(report: &SchedulerTickReport, json: bool) -> Result<()> {
+    output(json, report, || {
+        println!(
+            "Scheduler tick: {} event(s), {} recovery request(s), {} automatic pause(s).",
+            report.event_ids.len(),
+            report.recovery_required.len(),
+            report.automatically_paused.len()
+        );
+        if !report.recovery_required.is_empty() {
+            println!("Recovery required: {}", report.recovery_required.join(", "));
+        }
+        if !report.automatically_paused.is_empty() {
+            println!(
+                "Automatically paused: {}",
+                report.automatically_paused.join(", ")
+            );
+        }
+    })
+}
+
+fn print_scheduler_report(report: &SchedulerReport) {
+    println!("Scheduler jobs: {}", report.jobs.len());
+    for job in &report.jobs {
+        print_scheduler_job(job);
+    }
+    println!("{}", report.store_path);
+}
+
+fn print_scheduler_job(job: &SchedulerJobView) {
+    println!(
+        "{} · {:?} · priority={:?} · run={}",
+        job.job_id, job.status, job.spec.priority, job.run_id
+    );
+    println!(
+        "  dispatches={} failures={} eligible={} reason={}",
+        job.dispatches.len(),
+        job.consecutive_failures,
+        job.eligibility.eligible,
+        job.eligibility.reason
+    );
+    if !job.spec.dependencies.is_empty() {
+        println!("  dependencies={}", job.spec.dependencies.join(","));
+    }
 }
 
 fn run_observe(
