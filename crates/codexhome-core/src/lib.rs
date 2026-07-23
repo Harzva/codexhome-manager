@@ -6,17 +6,25 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod agent_runs;
 mod home;
 mod observability;
 mod registry;
 
+pub use agent_runs::{
+    generate_id, AgentArtifactView, AgentAttemptView, AgentRunAction, AgentRunMutationReport,
+    AgentRunReport, AgentRunStore, AgentRunView, AgentTaskView, AgentVerificationView,
+    AttemptLifecycleStatus, RunBudgetState, RunConsumption, RunLifecycleStatus, RunRecovery,
+    TaskLifecycleStatus, AGENT_RUN_MUTATION_SCHEMA_VERSION, AGENT_RUN_REPORT_SCHEMA_VERSION,
+};
 pub use home::{CopySummary, HomeManager, HomeMutationResult};
 pub use observability::{
-    observability_events_csv, parse_observability_events, EventSafety, ExecutionIdentity,
-    FailureInfo, HealthSnapshot, LatestHomeHealth, ObservabilityAppendReport, ObservabilityEvent,
-    ObservabilityEventType, ObservabilityExport, ObservabilityFilter, ObservabilityGroup,
-    ObservabilityStatus, ObservabilityStore, ObservabilitySummary, ObservabilityTotals,
-    ObservabilityVerifyReport, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
+    observability_events_csv, parse_observability_events, AttemptTransition, AttemptTransitionKind,
+    EventDetails, EventSafety, ExecutionIdentity, FailureInfo, HealthSnapshot, LatestHomeHealth,
+    ObservabilityAppendReport, ObservabilityEvent, ObservabilityEventType, ObservabilityExport,
+    ObservabilityFilter, ObservabilityGroup, ObservabilityStatus, ObservabilityStore,
+    ObservabilitySummary, ObservabilityTotals, ObservabilityVerifyReport, RunBudget,
+    TaskDescriptor, TraceContext, UsageDelta, OBSERVABILITY_EVENT_SCHEMA_VERSION,
     OBSERVABILITY_EXPORT_SCHEMA_VERSION, OBSERVABILITY_SUMMARY_SCHEMA_VERSION,
     OBSERVABILITY_VERIFY_SCHEMA_VERSION,
 };

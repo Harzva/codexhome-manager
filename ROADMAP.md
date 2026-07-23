@@ -19,6 +19,16 @@ The detailed product roadmap was developed before repository initialization. Thi
 - Desktop read/mutation contracts.
 - Tauri Desktop UI connected directly to `codexhome-core`.
 
+## v0.2.1 — Observability and Agent Run state ✅
+
+- Strict append-only Task/Run/Attempt/thread event stream.
+- Token, duration, cache, retry, failure, cost, quota, and Home-health summaries.
+- Durable Agent Run projection from the event stream.
+- Retry and Home/model migration lineage under one `run_id`.
+- Token, duration, cost, and Attempt budgets.
+- Failed-attempt cost, artifacts, verification, final-result IDs, and recovery advice.
+- Versioned CLI JSON plus JSON/CSV export.
+
 ## v0.3 — Skill placement
 
 - Skill Space manifests and capacity budgets.
@@ -31,10 +41,10 @@ The detailed product roadmap was developed before repository initialization. Thi
 
 ## v0.4 — Execution engine
 
-- `codexhome run @agent`.
+- Launch `codexhome run @agent` from the durable Run state.
 - Isolated worktrees.
-- JSONL event capture, final result, Diff, and test evidence.
-- Timeout, cancellation, retry, and review states.
+- Process capture, final result, Diff, and test evidence.
+- Timeout/cancellation signals and review-state execution adapters.
 
 ## v0.5 — Agent Household
 

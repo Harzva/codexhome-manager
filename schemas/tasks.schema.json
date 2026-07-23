@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/tasks.schema.json",
+  "title": "CodexHome Tasks",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "storePath", "tasks", "safety"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.tasks.v1" },
+    "storePath": { "type": "string" },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "agent-runs.schema.json#/$defs/task" }
+    },
+    "safety": { "$ref": "observability-event.schema.json#/$defs/safety" }
+  }
+}

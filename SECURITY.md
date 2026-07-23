@@ -28,7 +28,15 @@ Discovery output includes local Home paths and may include provider hostnames. T
 
 ## Execution boundary
 
-Future execution features must:
+Current Agent Run state:
+
+- stores only bounded labels, identities, route reasons, failure reasons, and opaque evidence IDs;
+- rejects obvious credential patterns and undeclared local paths in events;
+- records no prompts, responses, environment dumps, raw tool arguments, or artifact paths;
+- uses an owner-only event file and only changes permissions on directories it creates;
+- validates transitions and budgets under one exclusive append lock.
+
+Future process execution features must:
 
 - use explicit target Homes;
 - show third-party provider destinations;

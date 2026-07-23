@@ -48,6 +48,51 @@ pub enum ObservabilityStatus {
     Unhealthy,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskDescriptor {
+    pub label: String,
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunBudget {
+    pub max_total_tokens: Option<u64>,
+    pub max_duration_ms: Option<u64>,
+    pub max_cost_microusd: Option<u64>,
+    pub max_attempts: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptTransitionKind {
+    Initial,
+    Retry,
+    Migration,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttemptTransition {
+    pub kind: AttemptTransitionKind,
+    pub from_attempt_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EventDetails {
+    pub task: Option<TaskDescriptor>,
+    pub budget: Option<RunBudget>,
+    pub route_reason: Option<String>,
+    pub transition: Option<AttemptTransition>,
+    pub artifact_id: Option<String>,
+    pub verification_id: Option<String>,
+    pub target_artifact_id: Option<String>,
+    #[serde(default)]
+    pub final_artifact_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TraceContext {
@@ -149,6 +194,8 @@ pub struct ObservabilityEvent {
     pub verification_kind: Option<String>,
     pub failure: Option<FailureInfo>,
     pub health: Option<HealthSnapshot>,
+    #[serde(default)]
+    pub details: EventDetails,
     pub safety: EventSafety,
 }
 
@@ -185,6 +232,17 @@ impl ObservabilityEvent {
             ("toolName", self.tool_name.as_deref()),
             ("artifactKind", self.artifact_kind.as_deref()),
             ("verificationKind", self.verification_kind.as_deref()),
+            (
+                "task.label",
+                self.details.task.as_ref().map(|task| task.label.as_str()),
+            ),
+            (
+                "task.kind",
+                self.details
+                    .task
+                    .as_ref()
+                    .and_then(|task| task.kind.as_deref()),
+            ),
         ] {
             if let Some(value) = value {
                 validate_label(name, value)?;
@@ -205,6 +263,14 @@ impl ObservabilityEvent {
                 self.event_id
             );
         }
+        if !self.safety.includes_local_paths
+            && event_text_values(self).any(contains_obvious_local_path)
+        {
+            bail!(
+                "event {} contains an apparent local path but safety.includesLocalPaths is false",
+                self.event_id
+            );
+        }
         if let Some(failure) = &self.failure {
             validate_label("failure.code", &failure.code)?;
             if let Some(phase) = &failure.phase {
@@ -221,6 +287,7 @@ impl ObservabilityEvent {
                 );
             }
         }
+        validate_event_details(self)?;
         validate_event_shape(self)
     }
 }
@@ -385,17 +452,34 @@ impl ObservabilityStore {
         load_events(file, &self.path)
     }
 
+    pub fn load_verified(&self) -> Result<Vec<ObservabilityEvent>> {
+        let events = self.load()?;
+        verify_events(&events)?;
+        Ok(events)
+    }
+
     pub fn append(&self, incoming: &[ObservabilityEvent]) -> Result<ObservabilityAppendReport> {
         if incoming.is_empty() {
             bail!("at least one observability event is required");
         }
+        let incoming = incoming.to_vec();
+        self.append_checked(move |_| Ok(incoming))
+    }
+
+    pub fn append_checked(
+        &self,
+        build: impl FnOnce(&[ObservabilityEvent]) -> Result<Vec<ObservabilityEvent>>,
+    ) -> Result<ObservabilityAppendReport> {
         let parent = self
             .path
             .parent()
             .context("observability store path has no parent directory")?;
+        let parent_existed = parent.exists();
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
-        secure_directory(parent)?;
+        if !parent_existed {
+            secure_directory(parent)?;
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -407,11 +491,15 @@ impl ObservabilityStore {
             .with_context(|| format!("failed to lock {}", self.path.display()))?;
         file.seek(SeekFrom::Start(0))?;
         let existing = load_events(&file, &self.path)?;
+        let incoming = build(&existing)?;
+        if incoming.is_empty() {
+            bail!("at least one observability event is required");
+        }
         let mut combined = existing.clone();
-        combined.extend_from_slice(incoming);
+        combined.extend_from_slice(&incoming);
         verify_events(&combined)?;
         file.seek(SeekFrom::End(0))?;
-        for event in incoming {
+        for event in &incoming {
             serde_json::to_writer(&mut file, event)?;
             file.write_all(b"\n")?;
         }
@@ -447,15 +535,13 @@ impl ObservabilityStore {
     }
 
     pub fn summary(&self, filter: &ObservabilityFilter) -> Result<ObservabilitySummary> {
-        let events = self.load()?;
-        verify_events(&events)?;
+        let events = self.load_verified()?;
         let filtered = filter.filter(&events);
         summarize(&filtered, &self.path)
     }
 
     pub fn export(&self, filter: &ObservabilityFilter) -> Result<ObservabilityExport> {
-        let events = self.load()?;
-        verify_events(&events)?;
+        let events = self.load_verified()?;
         Ok(ObservabilityExport {
             ok: true,
             schema_version: OBSERVABILITY_EXPORT_SCHEMA_VERSION,
@@ -489,7 +575,7 @@ pub fn parse_observability_events(input: &str) -> Result<Vec<ObservabilityEvent>
 
 pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
     let mut output = String::from(
-        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason\n",
+        "schema_version,event_id,timestamp_ms,event_type,status,task_id,run_id,attempt_id,thread_id,home_id,home_alias,account_id,provider,model,input_tokens,output_tokens,cached_input_tokens,cache_hits,cache_misses,duration_ms,estimated_cost_microusd,retries,failure_code,failure_phase,failure_reason,task_label,task_kind,budget_max_total_tokens,budget_max_duration_ms,budget_max_cost_microusd,budget_max_attempts,route_reason,transition_kind,from_attempt_id,artifact_id,verification_id,target_artifact_id,final_artifact_ids\n",
     );
     for event in events {
         let fields = [
@@ -530,6 +616,63 @@ pub fn observability_events_csv(events: &[ObservabilityEvent]) -> String {
                 .as_ref()
                 .map(|failure| failure.reason.clone())
                 .unwrap_or_default(),
+            event
+                .details
+                .task
+                .as_ref()
+                .map(|task| task.label.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .task
+                .as_ref()
+                .and_then(|task| task.kind.clone())
+                .unwrap_or_default(),
+            event
+                .details
+                .budget
+                .as_ref()
+                .and_then(|budget| budget.max_total_tokens)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .budget
+                .as_ref()
+                .and_then(|budget| budget.max_duration_ms)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .budget
+                .as_ref()
+                .and_then(|budget| budget.max_cost_microusd)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            event
+                .details
+                .budget
+                .as_ref()
+                .and_then(|budget| budget.max_attempts)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            option(&event.details.route_reason),
+            event
+                .details
+                .transition
+                .as_ref()
+                .map(|transition| json_name(&transition.kind))
+                .unwrap_or_default(),
+            event
+                .details
+                .transition
+                .as_ref()
+                .and_then(|transition| transition.from_attempt_id.clone())
+                .unwrap_or_default(),
+            option(&event.details.artifact_id),
+            option(&event.details.verification_id),
+            option(&event.details.target_artifact_id),
+            event.details.final_artifact_ids.join(";"),
         ];
         output.push_str(
             &fields
@@ -636,6 +779,12 @@ impl Accumulator {
             }
             _ => {}
         }
+        if !matches!(
+            event.event_type,
+            ObservabilityEventType::AttemptCompleted | ObservabilityEventType::AttemptFailed
+        ) {
+            return Ok(());
+        }
         for (target, value, label) in [
             (
                 &mut self.totals.input_tokens,
@@ -711,8 +860,10 @@ struct TraceIndexes {
     runs: BTreeMap<String, String>,
     attempts: BTreeMap<String, (String, String)>,
     threads: BTreeMap<String, (String, String)>,
-    terminal_attempts: BTreeSet<String>,
+    terminal_attempts: BTreeMap<String, (ObservabilityStatus, bool)>,
     terminal_runs: BTreeSet<String>,
+    artifacts: BTreeMap<String, (String, String, String)>,
+    verifications: BTreeSet<String>,
     last_timestamp_by_run: BTreeMap<String, u64>,
 }
 
@@ -756,6 +907,23 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
     let run_id = event.trace.run_id.as_deref();
     let attempt_id = event.trace.attempt_id.as_deref();
     let thread_id = event.trace.thread_id.as_deref();
+    if let Some(run) = run_id {
+        if indexes.terminal_runs.contains(run)
+            && !matches!(
+                event.event_type,
+                ObservabilityEventType::QuotaSnapshot
+                    | ObservabilityEventType::RateLimited
+                    | ObservabilityEventType::AuthInvalid
+                    | ObservabilityEventType::HomeHealth
+            )
+        {
+            bail!(
+                "event {} is appended after runId '{}' reached a terminal state",
+                event.event_id,
+                run
+            );
+        }
+    }
     match event.event_type {
         ObservabilityEventType::TaskCreated => {
             let task = required("taskId", task_id)?;
@@ -778,6 +946,7 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
         ObservabilityEventType::AttemptStarted => {
             let (task, run) = verify_run_link(event, &indexes.runs)?;
             let attempt = required("attemptId", attempt_id)?;
+            verify_attempt_transition(event, indexes, task, run)?;
             if indexes
                 .attempts
                 .insert(attempt.to_owned(), (task.to_owned(), run.to_owned()))
@@ -788,6 +957,21 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
         }
         ObservabilityEventType::ThreadLinked => {
             let (task, run) = verify_run_link(event, &indexes.runs)?;
+            if let Some(attempt) = attempt_id {
+                let expected = indexes.attempts.get(attempt).with_context(|| {
+                    format!(
+                        "event {} references unknown attemptId '{}'",
+                        event.event_id, attempt
+                    )
+                })?;
+                if expected != &(task.to_owned(), run.to_owned()) {
+                    bail!(
+                        "event {} attemptId '{}' belongs to another task/run",
+                        event.event_id,
+                        attempt
+                    );
+                }
+            }
             let thread = required("threadId", thread_id)?;
             if indexes
                 .threads
@@ -797,9 +981,15 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
                 bail!("threadId '{}' is linked more than once", thread);
             }
             if let Some(parent) = &event.trace.parent_thread_id {
-                if !indexes.threads.contains_key(parent) {
-                    bail!(
+                let expected = indexes.threads.get(parent).with_context(|| {
+                    format!(
                         "event {} references unknown parentThreadId '{}'",
+                        event.event_id, parent
+                    )
+                })?;
+                if expected != &(task.to_owned(), run.to_owned()) {
+                    bail!(
+                        "event {} parentThreadId '{}' belongs to another task/run",
                         event.event_id,
                         parent
                     );
@@ -830,13 +1020,103 @@ fn verify_links(event: &ObservabilityEvent, indexes: &mut TraceIndexes) -> Resul
             if matches!(
                 event.event_type,
                 ObservabilityEventType::AttemptCompleted | ObservabilityEventType::AttemptFailed
-            ) && !indexes.terminal_attempts.insert(attempt.to_owned())
-            {
-                bail!("attemptId '{}' has more than one terminal event", attempt);
+            ) {
+                let retryable = event
+                    .failure
+                    .as_ref()
+                    .is_some_and(|failure| failure.retryable);
+                if indexes
+                    .terminal_attempts
+                    .insert(attempt.to_owned(), (event.status, retryable))
+                    .is_some()
+                {
+                    bail!("attemptId '{}' has more than one terminal event", attempt);
+                }
+            }
+            if event.event_type == ObservabilityEventType::ArtifactCreated {
+                let artifact = event
+                    .details
+                    .artifact_id
+                    .as_deref()
+                    .unwrap_or(&event.event_id);
+                if indexes
+                    .artifacts
+                    .insert(
+                        artifact.to_owned(),
+                        (task.to_owned(), run.to_owned(), attempt.to_owned()),
+                    )
+                    .is_some()
+                {
+                    bail!("artifactId '{}' is created more than once", artifact);
+                }
+            }
+            if event.event_type == ObservabilityEventType::VerificationCompleted {
+                let verification = event
+                    .details
+                    .verification_id
+                    .as_deref()
+                    .unwrap_or(&event.event_id);
+                if !indexes.verifications.insert(verification.to_owned()) {
+                    bail!(
+                        "verificationId '{}' is created more than once",
+                        verification
+                    );
+                }
+                if let Some(artifact) = &event.details.target_artifact_id {
+                    let expected = indexes.artifacts.get(artifact).with_context(|| {
+                        format!(
+                            "event {} references unknown targetArtifactId '{}'",
+                            event.event_id, artifact
+                        )
+                    })?;
+                    if expected.0 != task || expected.1 != run {
+                        bail!(
+                            "event {} targetArtifactId '{}' belongs to another task/run",
+                            event.event_id,
+                            artifact
+                        );
+                    }
+                }
             }
         }
         ObservabilityEventType::RunCompleted | ObservabilityEventType::RunFailed => {
-            let (_, run) = verify_run_link(event, &indexes.runs)?;
+            let (task, run) = verify_run_link(event, &indexes.runs)?;
+            if indexes.attempts.iter().any(|(attempt, owner)| {
+                owner == &(task.to_owned(), run.to_owned())
+                    && !indexes.terminal_attempts.contains_key(attempt)
+            }) {
+                bail!("runId '{}' has active attempts", run);
+            }
+            if event.event_type == ObservabilityEventType::RunCompleted
+                && !indexes
+                    .terminal_attempts
+                    .iter()
+                    .any(|(attempt, (status, _))| {
+                        *status == ObservabilityStatus::Succeeded
+                            && indexes.attempts.get(attempt)
+                                == Some(&(task.to_owned(), run.to_owned()))
+                    })
+            {
+                bail!(
+                    "runId '{}' cannot complete without a successful attempt",
+                    run
+                );
+            }
+            for artifact in &event.details.final_artifact_ids {
+                let expected = indexes.artifacts.get(artifact).with_context(|| {
+                    format!(
+                        "event {} references unknown finalArtifactId '{}'",
+                        event.event_id, artifact
+                    )
+                })?;
+                if expected.0 != task || expected.1 != run {
+                    bail!(
+                        "event {} finalArtifactId '{}' belongs to another task/run",
+                        event.event_id,
+                        artifact
+                    );
+                }
+            }
             if !indexes.terminal_runs.insert(run.to_owned()) {
                 bail!("runId '{}' has more than one terminal event", run);
             }
@@ -892,6 +1172,170 @@ fn verify_optional_thread(
             event.event_id,
             thread
         );
+    }
+    Ok(())
+}
+
+fn verify_attempt_transition(
+    event: &ObservabilityEvent,
+    indexes: &TraceIndexes,
+    task: &str,
+    run: &str,
+) -> Result<()> {
+    let Some(transition) = &event.details.transition else {
+        return Ok(());
+    };
+    match transition.kind {
+        AttemptTransitionKind::Initial => {
+            if transition.from_attempt_id.is_some() {
+                bail!(
+                    "event {} initial attempt cannot name fromAttemptId",
+                    event.event_id
+                );
+            }
+        }
+        AttemptTransitionKind::Retry | AttemptTransitionKind::Migration => {
+            let source = required(
+                "details.transition.fromAttemptId",
+                transition.from_attempt_id.as_deref(),
+            )?;
+            let owner = indexes.attempts.get(source).with_context(|| {
+                format!(
+                    "event {} references unknown fromAttemptId '{}'",
+                    event.event_id, source
+                )
+            })?;
+            if owner != &(task.to_owned(), run.to_owned()) {
+                bail!(
+                    "event {} fromAttemptId '{}' belongs to another task/run",
+                    event.event_id,
+                    source
+                );
+            }
+            let (status, retryable) = indexes.terminal_attempts.get(source).with_context(|| {
+                format!(
+                    "event {} fromAttemptId '{}' is not terminal",
+                    event.event_id, source
+                )
+            })?;
+            if *status == ObservabilityStatus::Succeeded {
+                bail!(
+                    "event {} cannot continue from successful attempt '{}'",
+                    event.event_id,
+                    source
+                );
+            }
+            if transition.kind == AttemptTransitionKind::Retry && !retryable {
+                bail!(
+                    "event {} cannot retry non-retryable attempt '{}'",
+                    event.event_id,
+                    source
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_event_details(event: &ObservabilityEvent) -> Result<()> {
+    let details = &event.details;
+    if let Some(task) = &details.task {
+        validate_label("details.task.label", &task.label)?;
+        if let Some(kind) = &task.kind {
+            validate_label("details.task.kind", kind)?;
+        }
+        if event.event_type != ObservabilityEventType::TaskCreated {
+            bail!("event {} task details require task_created", event.event_id);
+        }
+    }
+    if let Some(budget) = &details.budget {
+        if event.event_type != ObservabilityEventType::RunStarted {
+            bail!("event {} budget requires run_started", event.event_id);
+        }
+        if budget.max_total_tokens.is_none()
+            && budget.max_duration_ms.is_none()
+            && budget.max_cost_microusd.is_none()
+            && budget.max_attempts.is_none()
+        {
+            bail!("event {} budget has no limits", event.event_id);
+        }
+        if budget.max_total_tokens == Some(0)
+            || budget.max_duration_ms == Some(0)
+            || budget.max_cost_microusd == Some(0)
+            || budget.max_attempts == Some(0)
+        {
+            bail!("event {} budget limits must be positive", event.event_id);
+        }
+    }
+    if let Some(reason) = &details.route_reason {
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > 2048 || contains_obvious_secret(reason) {
+            bail!("event {} has an invalid route reason", event.event_id);
+        }
+        if event.event_type != ObservabilityEventType::AttemptStarted {
+            bail!(
+                "event {} routeReason requires attempt_started",
+                event.event_id
+            );
+        }
+    }
+    if let Some(transition) = &details.transition {
+        if event.event_type != ObservabilityEventType::AttemptStarted {
+            bail!(
+                "event {} transition requires attempt_started",
+                event.event_id
+            );
+        }
+        if let Some(source) = &transition.from_attempt_id {
+            validate_identifier("details.transition.fromAttemptId", source)?;
+        }
+    }
+    for (name, value, expected_type) in [
+        (
+            "details.artifactId",
+            details.artifact_id.as_deref(),
+            ObservabilityEventType::ArtifactCreated,
+        ),
+        (
+            "details.verificationId",
+            details.verification_id.as_deref(),
+            ObservabilityEventType::VerificationCompleted,
+        ),
+        (
+            "details.targetArtifactId",
+            details.target_artifact_id.as_deref(),
+            ObservabilityEventType::VerificationCompleted,
+        ),
+    ] {
+        if let Some(value) = value {
+            validate_identifier(name, value)?;
+            if event.event_type != expected_type {
+                bail!(
+                    "event {} {} is not valid for this event type",
+                    event.event_id,
+                    name
+                );
+            }
+        }
+    }
+    if !details.final_artifact_ids.is_empty() {
+        if event.event_type != ObservabilityEventType::RunCompleted {
+            bail!(
+                "event {} finalArtifactIds require run_completed",
+                event.event_id
+            );
+        }
+        let mut unique = BTreeSet::new();
+        for artifact in &details.final_artifact_ids {
+            validate_identifier("details.finalArtifactIds", artifact)?;
+            if !unique.insert(artifact) {
+                bail!(
+                    "event {} repeats finalArtifactId '{}'",
+                    event.event_id,
+                    artifact
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -1065,6 +1509,61 @@ fn contains_obvious_secret(value: &str) -> bool {
         })
 }
 
+fn event_text_values(event: &ObservabilityEvent) -> impl Iterator<Item = &str> {
+    [
+        Some(event.event_id.as_str()),
+        event.trace.task_id.as_deref(),
+        event.trace.run_id.as_deref(),
+        event.trace.attempt_id.as_deref(),
+        event.trace.thread_id.as_deref(),
+        event.trace.parent_thread_id.as_deref(),
+        event.trace.fork_id.as_deref(),
+        event.identity.home_id.as_deref(),
+        event.identity.home_alias.as_deref(),
+        event.identity.account_id.as_deref(),
+        event.identity.provider.as_deref(),
+        event.identity.model.as_deref(),
+        event.identity.agent_role.as_deref(),
+        event.tool_name.as_deref(),
+        event.artifact_kind.as_deref(),
+        event.verification_kind.as_deref(),
+        event.details.task.as_ref().map(|task| task.label.as_str()),
+        event
+            .details
+            .task
+            .as_ref()
+            .and_then(|task| task.kind.as_deref()),
+        event.details.route_reason.as_deref(),
+        event
+            .details
+            .transition
+            .as_ref()
+            .and_then(|transition| transition.from_attempt_id.as_deref()),
+        event.details.artifact_id.as_deref(),
+        event.details.verification_id.as_deref(),
+        event.details.target_artifact_id.as_deref(),
+        event
+            .failure
+            .as_ref()
+            .map(|failure| failure.reason.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+fn contains_obvious_local_path(value: &str) -> bool {
+    let normalized = value.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    lower.starts_with('/')
+        || lower.contains(" /users/")
+        || lower.contains(" /home/")
+        || lower.contains(" /volumes/")
+        || lower.contains(" /tmp/")
+        || lower.contains(" /var/")
+        || lower.starts_with("c:/")
+        || lower.contains(" c:/")
+}
+
 fn matches_optional(expected: &Option<String>, actual: Option<&str>) -> bool {
     expected.as_ref().is_none_or(|value| actual == Some(value))
 }
@@ -1170,6 +1669,7 @@ mod tests {
             verification_kind: None,
             failure: None,
             health: None,
+            details: EventDetails::default(),
             safety: EventSafety::default(),
         }
     }
@@ -1235,6 +1735,57 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_usage_uses_terminal_attempt_totals_without_double_counting_breakdowns() {
+        let temp = TempDir::new().expect("temp");
+        let store = ObservabilityStore::new(temp.path().join("events.jsonl"));
+        let mut events = trace_fixture();
+        let mut tool = events[2].clone();
+        tool.event_id = "evt-tool".to_owned();
+        tool.timestamp_ms = 4;
+        tool.event_type = ObservabilityEventType::ToolCallCompleted;
+        tool.status = ObservabilityStatus::Succeeded;
+        tool.trace.thread_id = Some("thread-1".to_owned());
+        tool.tool_name = Some("compiler".to_owned());
+        tool.usage = events[4].usage.clone();
+        events.insert(4, tool);
+        store.append(&events).expect("append");
+
+        let summary = store
+            .summary(&ObservabilityFilter::default())
+            .expect("summary");
+        assert_eq!(summary.totals.tool_calls, 1);
+        assert_eq!(summary.totals.total_tokens, 140);
+        assert_eq!(summary.totals.duration_ms, 1500);
+        assert_eq!(summary.totals.estimated_cost_microusd, 1200);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn append_does_not_change_permissions_of_an_existing_parent_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().expect("temp");
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755))
+            .expect("set parent permissions");
+        let store = ObservabilityStore::new(temp.path().join("events.jsonl"));
+        store
+            .append(&[trace_fixture()[0].clone()])
+            .expect("append into existing parent");
+        let parent_mode = fs::metadata(temp.path())
+            .expect("parent metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let file_mode = fs::metadata(store.path())
+            .expect("file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(parent_mode, 0o755);
+        assert_eq!(file_mode, 0o600);
+    }
+
+    #[test]
     fn rejects_duplicate_ids_broken_links_and_secret_like_failure_text() {
         let mut events = trace_fixture();
         events[1].event_id = "evt-1".to_owned();
@@ -1256,7 +1807,7 @@ mod tests {
         failed.failure = Some(FailureInfo {
             code: "provider_error".to_owned(),
             phase: Some("inference".to_owned()),
-            reason: "Authorization: Bearer sk-this-must-not-enter-observability".to_owned(),
+            reason: "Authorization: Bearer [redacted-test-value]".to_owned(),
             retryable: true,
         });
         assert!(failed
@@ -1264,6 +1815,21 @@ mod tests {
             .expect_err("secret")
             .to_string()
             .contains("secret"));
+
+        let mut local_path = trace_fixture()[0].clone();
+        local_path.details.task = Some(TaskDescriptor {
+            label: "Analyze /Users/example/private.pdf".to_owned(),
+            kind: Some("document".to_owned()),
+        });
+        assert!(local_path
+            .validate()
+            .expect_err("unreported local path")
+            .to_string()
+            .contains("includesLocalPaths"));
+        local_path.safety.includes_local_paths = true;
+        local_path
+            .validate()
+            .expect("reported local path is allowed");
     }
 
     #[test]
@@ -1306,5 +1872,6 @@ mod tests {
         assert!(csv.starts_with("schema_version,event_id,timestamp_ms"));
         assert!(csv.contains("attempt_completed"));
         assert!(csv.contains("gpt-test,100,40,60"));
+        assert!(csv.contains("route_reason,transition_kind,from_attempt_id"));
     }
 }

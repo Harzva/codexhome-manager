@@ -1,9 +1,12 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use codexhome_core::{
-    discover, doctor, observability_events_csv, parse_observability_events, CodexHomeSummary,
-    DiscoveryOptions, DiscoveryReport, HomeManager, HomeMutationResult, ObservabilityFilter,
-    ObservabilityStore, ObservabilitySummary, RegisteredHomeView, RegistryReport, RegistryStore,
+    discover, doctor, generate_id, observability_events_csv, parse_observability_events,
+    AgentRunAction, AgentRunMutationReport, AgentRunReport, AgentRunStore, AgentRunView,
+    AttemptTransition, AttemptTransitionKind, CodexHomeSummary, DiscoveryOptions, DiscoveryReport,
+    ExecutionIdentity, FailureInfo, HomeManager, HomeMutationResult, ObservabilityFilter,
+    ObservabilityStatus, ObservabilityStore, ObservabilitySummary, RegisteredHomeView,
+    RegistryReport, RegistryStore, RunBudget, UsageDelta,
 };
 use serde_json::json;
 use std::fs;
@@ -17,7 +20,7 @@ use std::process::ExitCode;
     version,
     about = "Discover and manage specialized Codex Homes",
     long_about = "Discover, register, and manage multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output.",
-    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome home import /path/to/home --alias @research --specialty papers\n  codexhome observe record events.jsonl\n  codexhome observe summary --home-id @research --json"
+    after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome task create --label 'Compile benchmark'\n  codexhome run start task-123 --max-total-tokens 300000\n  codexhome run attempt start run-123 --home-id home-main --model gpt-5.5\n  codexhome observe summary --home-id @research --json"
 )]
 struct Cli {
     /// Add a CODEX_HOME candidate without changing the active shell environment.
@@ -70,6 +73,215 @@ enum Command {
     Observe {
         #[command(subcommand)]
         command: ObserveCommand,
+    },
+
+    /// Create and inspect durable task identities.
+    Task {
+        #[command(subcommand)]
+        command: TaskCommand,
+    },
+
+    /// Operate durable Agent Runs, attempts, threads, artifacts, and verification.
+    Run {
+        #[command(subcommand)]
+        command: RunCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TaskCommand {
+    /// Create a task without storing its prompt or private payload.
+    Create {
+        #[arg(long)]
+        task_id: Option<String>,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        kind: Option<String>,
+    },
+    /// List task projections from the append-only event stream.
+    List,
+    /// Show one task and all of its runs.
+    Show { task_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum RunCommand {
+    /// Start a run for an existing task.
+    Start {
+        task_id: String,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[command(flatten)]
+        budget: BudgetArgs,
+    },
+    /// List run projections, optionally for one task.
+    List {
+        #[arg(long)]
+        task_id: Option<String>,
+    },
+    /// Show one run with attempts, costs, artifacts, and recovery state.
+    Show { run_id: String },
+    /// Start, retry, migrate, complete, or fail an Agent attempt.
+    Attempt {
+        #[command(subcommand)]
+        command: AttemptCommand,
+    },
+    /// Link a Codex thread or fork to a run and optional attempt.
+    Thread {
+        #[command(subcommand)]
+        command: ThreadCommand,
+    },
+    /// Record a completed tool call.
+    Tool {
+        #[command(subcommand)]
+        command: ToolCommand,
+    },
+    /// Register an opaque artifact identity and kind.
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommand,
+    },
+    /// Record verification evidence for an attempt or artifact.
+    Verification {
+        #[command(subcommand)]
+        command: VerificationCommand,
+    },
+    /// Complete a run after all attempts are terminal.
+    Complete {
+        run_id: String,
+        #[arg(long = "final-artifact-id")]
+        final_artifact_ids: Vec<String>,
+    },
+    /// Fail, cancel, or time out a run after all attempts are terminal.
+    Fail {
+        run_id: String,
+        #[arg(long, value_enum, default_value_t = FailureStatusArg::Failed)]
+        status: FailureStatusArg,
+        #[command(flatten)]
+        failure: FailureArgs,
+    },
+    /// Print the shared Agent Run and observability event-store path.
+    Path,
+}
+
+#[derive(Debug, Subcommand)]
+enum AttemptCommand {
+    /// Start an initial attempt on one Home and model.
+    Start {
+        run_id: String,
+        #[arg(long)]
+        attempt_id: Option<String>,
+        #[command(flatten)]
+        identity: IdentityArgs,
+        #[arg(long)]
+        route_reason: Option<String>,
+    },
+    /// Retry a retryable failed attempt in the same run.
+    Retry {
+        run_id: String,
+        from_attempt_id: String,
+        #[arg(long)]
+        attempt_id: Option<String>,
+        #[command(flatten)]
+        identity: IdentityArgs,
+        #[arg(long)]
+        route_reason: String,
+    },
+    /// Migrate a failed attempt to a different Home, account, or model.
+    Migrate {
+        run_id: String,
+        from_attempt_id: String,
+        #[arg(long)]
+        attempt_id: Option<String>,
+        #[command(flatten)]
+        identity: IdentityArgs,
+        #[arg(long)]
+        route_reason: String,
+    },
+    /// Mark an attempt successful and record its total usage.
+    Complete {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[command(flatten)]
+        usage: TerminalUsageArgs,
+    },
+    /// Mark an attempt failed, cancelled, or timed out.
+    Fail {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long, value_enum, default_value_t = FailureStatusArg::Failed)]
+        status: FailureStatusArg,
+        #[command(flatten)]
+        usage: TerminalUsageArgs,
+        #[command(flatten)]
+        failure: FailureArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ThreadCommand {
+    Link {
+        run_id: String,
+        thread_id: String,
+        #[arg(long)]
+        attempt_id: Option<String>,
+        #[arg(long)]
+        parent_thread_id: Option<String>,
+        #[arg(long)]
+        fork_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ToolCommand {
+    Record {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        tool_name: String,
+        #[command(flatten)]
+        usage: ToolUsageArgs,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ArtifactCommand {
+    Record {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        artifact_id: Option<String>,
+        #[arg(long)]
+        artifact_kind: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum VerificationCommand {
+    Record {
+        run_id: String,
+        attempt_id: String,
+        #[arg(long)]
+        thread_id: Option<String>,
+        #[arg(long)]
+        verification_id: Option<String>,
+        #[arg(long)]
+        verification_kind: String,
+        #[arg(long)]
+        target_artifact_id: Option<String>,
+        #[arg(long, default_value_t = true)]
+        succeeded: bool,
+        #[arg(long, default_value_t = 0)]
+        duration_ms: u64,
     },
 }
 
@@ -239,6 +451,176 @@ enum ExportFormat {
     Csv,
 }
 
+#[derive(Debug, Args, Default)]
+struct BudgetArgs {
+    #[arg(long)]
+    max_total_tokens: Option<u64>,
+    #[arg(long)]
+    max_duration_ms: Option<u64>,
+    #[arg(long)]
+    max_cost_microusd: Option<u64>,
+    #[arg(long)]
+    max_attempts: Option<u32>,
+}
+
+impl BudgetArgs {
+    fn into_budget(self) -> Option<RunBudget> {
+        if self.max_total_tokens.is_none()
+            && self.max_duration_ms.is_none()
+            && self.max_cost_microusd.is_none()
+            && self.max_attempts.is_none()
+        {
+            None
+        } else {
+            Some(RunBudget {
+                max_total_tokens: self.max_total_tokens,
+                max_duration_ms: self.max_duration_ms,
+                max_cost_microusd: self.max_cost_microusd,
+                max_attempts: self.max_attempts,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct IdentityArgs {
+    #[arg(long)]
+    home_id: String,
+    #[arg(long)]
+    home_alias: Option<String>,
+    #[arg(long)]
+    account: Option<String>,
+    #[arg(long)]
+    provider: Option<String>,
+    #[arg(long)]
+    model: String,
+    #[arg(long)]
+    agent_role: Option<String>,
+}
+
+impl From<IdentityArgs> for ExecutionIdentity {
+    fn from(value: IdentityArgs) -> Self {
+        Self {
+            home_id: Some(value.home_id),
+            home_alias: value.home_alias,
+            account_id: value.account,
+            provider: value.provider,
+            model: Some(value.model),
+            agent_role: value.agent_role,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct TerminalUsageArgs {
+    #[arg(long)]
+    input_tokens: u64,
+    #[arg(long)]
+    output_tokens: u64,
+    #[arg(long, default_value_t = 0)]
+    cached_input_tokens: u64,
+    #[arg(long, default_value_t = 0)]
+    cache_hits: u64,
+    #[arg(long, default_value_t = 0)]
+    cache_misses: u64,
+    #[arg(long)]
+    duration_ms: u64,
+    #[arg(long)]
+    estimated_cost_microusd: u64,
+    #[arg(long, default_value_t = 0)]
+    retries: u64,
+}
+
+impl From<TerminalUsageArgs> for UsageDelta {
+    fn from(value: TerminalUsageArgs) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cached_input_tokens: value.cached_input_tokens,
+            cache_hits: value.cache_hits,
+            cache_misses: value.cache_misses,
+            duration_ms: value.duration_ms,
+            estimated_cost_microusd: value.estimated_cost_microusd,
+            retries: value.retries,
+        }
+    }
+}
+
+#[derive(Debug, Args, Default)]
+struct ToolUsageArgs {
+    #[arg(long, default_value_t = 0)]
+    input_tokens: u64,
+    #[arg(long, default_value_t = 0)]
+    output_tokens: u64,
+    #[arg(long, default_value_t = 0)]
+    cached_input_tokens: u64,
+    #[arg(long, default_value_t = 0)]
+    cache_hits: u64,
+    #[arg(long, default_value_t = 0)]
+    cache_misses: u64,
+    #[arg(long, default_value_t = 0)]
+    duration_ms: u64,
+    #[arg(long, default_value_t = 0)]
+    estimated_cost_microusd: u64,
+    #[arg(long, default_value_t = 0)]
+    retries: u64,
+}
+
+impl From<ToolUsageArgs> for UsageDelta {
+    fn from(value: ToolUsageArgs) -> Self {
+        Self {
+            input_tokens: value.input_tokens,
+            output_tokens: value.output_tokens,
+            cached_input_tokens: value.cached_input_tokens,
+            cache_hits: value.cache_hits,
+            cache_misses: value.cache_misses,
+            duration_ms: value.duration_ms,
+            estimated_cost_microusd: value.estimated_cost_microusd,
+            retries: value.retries,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+struct FailureArgs {
+    #[arg(long)]
+    failure_code: String,
+    #[arg(long)]
+    failure_phase: Option<String>,
+    #[arg(long)]
+    failure_reason: String,
+    #[arg(long)]
+    retryable: bool,
+}
+
+impl From<FailureArgs> for FailureInfo {
+    fn from(value: FailureArgs) -> Self {
+        Self {
+            code: value.failure_code,
+            phase: value.failure_phase,
+            reason: value.failure_reason,
+            retryable: value.retryable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum FailureStatusArg {
+    Failed,
+    Cancelled,
+    TimedOut,
+}
+
+impl From<FailureStatusArg> for ObservabilityStatus {
+    fn from(value: FailureStatusArg) -> Self {
+        match value {
+            FailureStatusArg::Failed => Self::Failed,
+            FailureStatusArg::Cancelled => Self::Cancelled,
+            FailureStatusArg::TimedOut => Self::TimedOut,
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let json_errors = cli.json;
@@ -308,6 +690,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Registry { command } => run_registry(command, registry, json),
         Command::Home { command } => run_home(command, registry, json),
         Command::Observe { command } => run_observe(command, observability_store, json),
+        Command::Task { command } => run_task(command, observability_store, json),
+        Command::Run { command } => run_agent_run(command, observability_store, json),
     }
 }
 
@@ -396,6 +780,336 @@ fn run_home(command: HomeCommand, registry_path: Option<PathBuf>, json: bool) ->
     };
     output(json, &result, || print_mutation(&result))?;
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_task(
+    command: TaskCommand,
+    observability_path: Option<PathBuf>,
+    json: bool,
+) -> Result<ExitCode> {
+    let store = AgentRunStore::from_environment(observability_path)?;
+    match command {
+        TaskCommand::Create {
+            task_id,
+            label,
+            kind,
+        } => {
+            let report = store.apply(AgentRunAction::CreateTask {
+                task_id: task_id.unwrap_or_else(|| generate_id("task")),
+                label,
+                kind,
+            })?;
+            output_run_mutation(&report, json)?;
+        }
+        TaskCommand::List => {
+            let report = store.report()?;
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.tasks.v1",
+                    "storePath": report.store_path,
+                    "tasks": report.tasks,
+                    "safety": report.safety,
+                }))?;
+            } else {
+                print_tasks(&report);
+            }
+        }
+        TaskCommand::Show { task_id } => {
+            let report = store.report()?;
+            let task = report.task(&task_id)?;
+            let runs = report
+                .runs
+                .iter()
+                .filter(|run| run.task_id == task_id)
+                .collect::<Vec<_>>();
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.task.v1",
+                    "task": task,
+                    "runs": runs,
+                    "safety": report.safety,
+                }))?;
+            } else {
+                println!("{} · {} · {:?}", task.task_id, task.label, task.status);
+                println!("Runs: {}", task.run_ids.len());
+                for run in runs {
+                    print_agent_run(run);
+                }
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_agent_run(
+    command: RunCommand,
+    observability_path: Option<PathBuf>,
+    json: bool,
+) -> Result<ExitCode> {
+    let store = AgentRunStore::from_environment(observability_path)?;
+    match command {
+        RunCommand::Start {
+            task_id,
+            run_id,
+            budget,
+        } => apply_run_action(
+            &store,
+            AgentRunAction::StartRun {
+                task_id,
+                run_id: run_id.unwrap_or_else(|| generate_id("run")),
+                budget: budget.into_budget(),
+            },
+            json,
+        )?,
+        RunCommand::List { task_id } => {
+            let mut report = store.report()?;
+            if let Some(task_id) = task_id {
+                report.runs.retain(|run| run.task_id == task_id);
+                report.tasks.retain(|task| task.task_id == task_id);
+            }
+            output(json, &report, || print_agent_runs(&report))?;
+        }
+        RunCommand::Show { run_id } => {
+            let report = store.report()?;
+            let run = report.run(&run_id)?;
+            let task = report.task(&run.task_id)?;
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.agent-run.v1",
+                    "task": task,
+                    "run": run,
+                    "safety": report.safety,
+                }))?;
+            } else {
+                println!("{} · {}", task.task_id, task.label);
+                print_agent_run(run);
+            }
+        }
+        RunCommand::Attempt { command } => {
+            let action = match command {
+                AttemptCommand::Start {
+                    run_id,
+                    attempt_id,
+                    identity,
+                    route_reason,
+                } => AgentRunAction::StartAttempt {
+                    run_id,
+                    attempt_id: attempt_id.unwrap_or_else(|| generate_id("attempt")),
+                    identity: identity.into(),
+                    transition: AttemptTransition {
+                        kind: AttemptTransitionKind::Initial,
+                        from_attempt_id: None,
+                    },
+                    route_reason,
+                },
+                AttemptCommand::Retry {
+                    run_id,
+                    from_attempt_id,
+                    attempt_id,
+                    identity,
+                    route_reason,
+                } => AgentRunAction::StartAttempt {
+                    run_id,
+                    attempt_id: attempt_id.unwrap_or_else(|| generate_id("attempt")),
+                    identity: identity.into(),
+                    transition: AttemptTransition {
+                        kind: AttemptTransitionKind::Retry,
+                        from_attempt_id: Some(from_attempt_id),
+                    },
+                    route_reason: Some(route_reason),
+                },
+                AttemptCommand::Migrate {
+                    run_id,
+                    from_attempt_id,
+                    attempt_id,
+                    identity,
+                    route_reason,
+                } => AgentRunAction::StartAttempt {
+                    run_id,
+                    attempt_id: attempt_id.unwrap_or_else(|| generate_id("attempt")),
+                    identity: identity.into(),
+                    transition: AttemptTransition {
+                        kind: AttemptTransitionKind::Migration,
+                        from_attempt_id: Some(from_attempt_id),
+                    },
+                    route_reason: Some(route_reason),
+                },
+                AttemptCommand::Complete {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    usage,
+                } => AgentRunAction::CompleteAttempt {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    usage: usage.into(),
+                },
+                AttemptCommand::Fail {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    status,
+                    usage,
+                    failure,
+                } => AgentRunAction::FailAttempt {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    status: status.into(),
+                    usage: usage.into(),
+                    failure: failure.into(),
+                },
+            };
+            apply_run_action(&store, action, json)?;
+        }
+        RunCommand::Thread { command } => {
+            let ThreadCommand::Link {
+                run_id,
+                thread_id,
+                attempt_id,
+                parent_thread_id,
+                fork_id,
+            } = command;
+            apply_run_action(
+                &store,
+                AgentRunAction::LinkThread {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    parent_thread_id,
+                    fork_id,
+                },
+                json,
+            )?;
+        }
+        RunCommand::Tool { command } => {
+            let ToolCommand::Record {
+                run_id,
+                attempt_id,
+                thread_id,
+                tool_name,
+                usage,
+            } = command;
+            apply_run_action(
+                &store,
+                AgentRunAction::RecordTool {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    tool_name,
+                    usage: usage.into(),
+                },
+                json,
+            )?;
+        }
+        RunCommand::Artifact { command } => {
+            let ArtifactCommand::Record {
+                run_id,
+                attempt_id,
+                thread_id,
+                artifact_id,
+                artifact_kind,
+            } = command;
+            apply_run_action(
+                &store,
+                AgentRunAction::RecordArtifact {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    artifact_id: artifact_id.unwrap_or_else(|| generate_id("artifact")),
+                    artifact_kind,
+                },
+                json,
+            )?;
+        }
+        RunCommand::Verification { command } => {
+            let VerificationCommand::Record {
+                run_id,
+                attempt_id,
+                thread_id,
+                verification_id,
+                verification_kind,
+                target_artifact_id,
+                succeeded,
+                duration_ms,
+            } = command;
+            apply_run_action(
+                &store,
+                AgentRunAction::RecordVerification {
+                    run_id,
+                    attempt_id,
+                    thread_id,
+                    verification_id: verification_id.unwrap_or_else(|| generate_id("verification")),
+                    verification_kind,
+                    target_artifact_id,
+                    succeeded,
+                    duration_ms,
+                },
+                json,
+            )?;
+        }
+        RunCommand::Complete {
+            run_id,
+            final_artifact_ids,
+        } => apply_run_action(
+            &store,
+            AgentRunAction::CompleteRun {
+                run_id,
+                final_artifact_ids,
+            },
+            json,
+        )?,
+        RunCommand::Fail {
+            run_id,
+            status,
+            failure,
+        } => apply_run_action(
+            &store,
+            AgentRunAction::FailRun {
+                run_id,
+                status: status.into(),
+                failure: failure.into(),
+            },
+            json,
+        )?,
+        RunCommand::Path => {
+            if json {
+                print_json(&json!({
+                    "ok": true,
+                    "schemaVersion": "codexhome.agent-run-path.v1",
+                    "storePath": store.path().to_string_lossy(),
+                    "includesLocalPaths": true,
+                }))?;
+            } else {
+                println!("{}", store.path().display());
+            }
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn apply_run_action(store: &AgentRunStore, action: AgentRunAction, json: bool) -> Result<()> {
+    let report = store.apply(action)?;
+    output_run_mutation(&report, json)
+}
+
+fn output_run_mutation(report: &AgentRunMutationReport, json: bool) -> Result<()> {
+    output(json, report, || {
+        println!(
+            "{} · task={} · run={} · attempt={}",
+            report.action,
+            report.task_id,
+            report.run_id.as_deref().unwrap_or("-"),
+            report.attempt_id.as_deref().unwrap_or("-")
+        );
+        if let Some(run) = &report.run {
+            print_agent_run(run);
+        }
+    })
 }
 
 fn run_observe(
@@ -644,6 +1358,88 @@ fn print_registry(report: &RegistryReport) {
         for issue in &home.issues {
             println!("  warning: {issue}");
         }
+    }
+}
+
+fn print_tasks(report: &AgentRunReport) {
+    println!(
+        "CodexHome Tasks · {} task(s) · {} run(s)",
+        report.tasks.len(),
+        report.runs.len()
+    );
+    println!("{}", report.store_path);
+    for task in &report.tasks {
+        println!(
+            "{} · {:?} · {} · runs={}",
+            task.task_id,
+            task.status,
+            task.label,
+            task.run_ids.len()
+        );
+    }
+}
+
+fn print_agent_runs(report: &AgentRunReport) {
+    println!(
+        "CodexHome Agent Runs · {} run(s) · {} task(s)",
+        report.runs.len(),
+        report.tasks.len()
+    );
+    println!("{}", report.store_path);
+    for run in &report.runs {
+        print_agent_run(run);
+    }
+}
+
+fn print_agent_run(run: &AgentRunView) {
+    println!(
+        "{} · {:?} · attempts={} · tokens={} · duration={}ms · cost={} microUSD",
+        run.run_id,
+        run.status,
+        run.attempts.len(),
+        run.consumption.total_tokens,
+        run.consumption.duration_ms,
+        run.consumption.estimated_cost_microusd
+    );
+    println!(
+        "  failure cost: {} tokens · {}ms · {} microUSD",
+        run.consumption.failed_attempt_tokens,
+        run.consumption.failed_attempt_duration_ms,
+        run.consumption.failed_attempt_cost_microusd
+    );
+    println!(
+        "  budget: {} · recovery: {} ({})",
+        if run.budget_state.within_budget {
+            "available".to_owned()
+        } else {
+            format!(
+                "exhausted:{}",
+                run.budget_state.exhausted_dimensions.join(",")
+            )
+        },
+        run.recovery.recommended_action,
+        run.recovery.reason
+    );
+    println!(
+        "  threads={} tools={} artifacts={} verifications={}",
+        run.thread_ids.len(),
+        run.tool_calls,
+        run.artifacts.len(),
+        run.verifications.len()
+    );
+    for attempt in &run.attempts {
+        println!(
+            "  attempt {} · {:?} · home={} · model={} · {} tokens · {}ms",
+            attempt.attempt_id,
+            attempt.status,
+            display(attempt.identity.home_id.as_deref()),
+            display(attempt.identity.model.as_deref()),
+            attempt
+                .usage
+                .input_tokens
+                .saturating_add(attempt.usage.output_tokens),
+            attempt.usage.duration_ms
+        );
     }
 }
 

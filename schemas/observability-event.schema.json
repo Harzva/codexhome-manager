@@ -75,6 +75,7 @@
         { "type": "null" }
       ]
     },
+    "details": { "$ref": "#/$defs/details" },
     "safety": { "$ref": "#/$defs/safety" }
   },
   "$defs": {
@@ -87,7 +88,7 @@
     "label": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 160
+      "maxLength": 256
     },
     "nullableLabel": {
       "oneOf": [
@@ -169,6 +170,89 @@
           "minimum": 0
         },
         "detailCode": { "$ref": "#/$defs/nullableLabel" }
+      }
+    },
+    "details": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "task": {
+          "oneOf": [
+            { "$ref": "#/$defs/taskDescriptor" },
+            { "type": "null" }
+          ]
+        },
+        "budget": {
+          "oneOf": [
+            { "$ref": "#/$defs/runBudget" },
+            { "type": "null" }
+          ]
+        },
+        "routeReason": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "transition": {
+          "oneOf": [
+            { "$ref": "#/$defs/attemptTransition" },
+            { "type": "null" }
+          ]
+        },
+        "artifactId": { "$ref": "#/$defs/nullableIdentifier" },
+        "verificationId": { "$ref": "#/$defs/nullableIdentifier" },
+        "targetArtifactId": { "$ref": "#/$defs/nullableIdentifier" },
+        "finalArtifactIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "taskDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label"],
+      "properties": {
+        "label": { "$ref": "#/$defs/label" },
+        "kind": { "$ref": "#/$defs/nullableLabel" }
+      }
+    },
+    "runBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxTotalTokens": { "type": ["integer", "null"], "minimum": 1 },
+        "maxDurationMs": { "type": ["integer", "null"], "minimum": 1 },
+        "maxCostMicrousd": { "type": ["integer", "null"], "minimum": 1 },
+        "maxAttempts": { "type": ["integer", "null"], "minimum": 1 }
+      },
+      "anyOf": [
+        {
+          "required": ["maxTotalTokens"],
+          "properties": { "maxTotalTokens": { "type": "integer", "minimum": 1 } }
+        },
+        {
+          "required": ["maxDurationMs"],
+          "properties": { "maxDurationMs": { "type": "integer", "minimum": 1 } }
+        },
+        {
+          "required": ["maxCostMicrousd"],
+          "properties": { "maxCostMicrousd": { "type": "integer", "minimum": 1 } }
+        },
+        {
+          "required": ["maxAttempts"],
+          "properties": { "maxAttempts": { "type": "integer", "minimum": 1 } }
+        }
+      ]
+    },
+    "attemptTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["initial", "retry", "migration"] },
+        "fromAttemptId": { "$ref": "#/$defs/nullableIdentifier" }
       }
     },
     "safety": {

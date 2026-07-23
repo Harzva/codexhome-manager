@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/agent-runs.schema.json",
+  "title": "CodexHome Agent Run Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "storePath",
+    "asOfTimestampMs",
+    "tasks",
+    "runs",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.agent-runs.v1" },
+    "storePath": { "type": "string" },
+    "asOfTimestampMs": { "type": ["integer", "null"], "minimum": 0 },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/task" }
+    },
+    "runs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/run" }
+    },
+    "safety": { "$ref": "observability-event.schema.json#/$defs/safety" }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId", "label", "kind", "createdAtMs", "status", "runIds"],
+      "properties": {
+        "taskId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "label": { "$ref": "observability-event.schema.json#/$defs/label" },
+        "kind": { "$ref": "observability-event.schema.json#/$defs/nullableLabel" },
+        "createdAtMs": { "type": "integer", "minimum": 0 },
+        "status": { "enum": ["pending", "running", "succeeded", "failed"] },
+        "runIds": {
+          "type": "array",
+          "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "taskId",
+        "status",
+        "startedAtMs",
+        "finishedAtMs",
+        "budget",
+        "budgetState",
+        "consumption",
+        "attempts",
+        "threadIds",
+        "toolCalls",
+        "artifacts",
+        "verifications",
+        "finalArtifactIds",
+        "failure",
+        "recovery"
+      ],
+      "properties": {
+        "runId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "taskId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "status": {
+          "enum": ["running", "succeeded", "failed", "cancelled", "timed_out"]
+        },
+        "startedAtMs": { "type": "integer", "minimum": 0 },
+        "finishedAtMs": { "type": ["integer", "null"], "minimum": 0 },
+        "budget": {
+          "oneOf": [
+            { "$ref": "observability-event.schema.json#/$defs/runBudget" },
+            { "type": "null" }
+          ]
+        },
+        "budgetState": { "$ref": "#/$defs/budgetState" },
+        "consumption": { "$ref": "#/$defs/consumption" },
+        "attempts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/attempt" }
+        },
+        "threadIds": {
+          "type": "array",
+          "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+        },
+        "toolCalls": { "type": "integer", "minimum": 0 },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "verifications": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/verification" }
+        },
+        "finalArtifactIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+        },
+        "failure": {
+          "oneOf": [
+            { "$ref": "observability-event.schema.json#/$defs/failure" },
+            { "type": "null" }
+          ]
+        },
+        "recovery": { "$ref": "#/$defs/recovery" }
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attemptId",
+        "ordinal",
+        "status",
+        "startedAtMs",
+        "finishedAtMs",
+        "identity",
+        "transition",
+        "routeReason",
+        "threadIds",
+        "usage",
+        "failure"
+      ],
+      "properties": {
+        "attemptId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "ordinal": { "type": "integer", "minimum": 1 },
+        "status": {
+          "enum": ["running", "succeeded", "failed", "cancelled", "timed_out"]
+        },
+        "startedAtMs": { "type": "integer", "minimum": 0 },
+        "finishedAtMs": { "type": ["integer", "null"], "minimum": 0 },
+        "identity": { "$ref": "observability-event.schema.json#/$defs/identity" },
+        "transition": {
+          "$ref": "observability-event.schema.json#/$defs/attemptTransition"
+        },
+        "routeReason": { "type": ["string", "null"], "maxLength": 2048 },
+        "threadIds": {
+          "type": "array",
+          "items": { "$ref": "observability-event.schema.json#/$defs/identifier" }
+        },
+        "usage": { "$ref": "observability-event.schema.json#/$defs/usage" },
+        "failure": {
+          "oneOf": [
+            { "$ref": "observability-event.schema.json#/$defs/failure" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifactId", "artifactKind", "attemptId", "threadId", "createdAtMs"],
+      "properties": {
+        "artifactId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "artifactKind": { "$ref": "observability-event.schema.json#/$defs/label" },
+        "attemptId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "threadId": { "$ref": "observability-event.schema.json#/$defs/nullableIdentifier" },
+        "createdAtMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verificationId",
+        "verificationKind",
+        "attemptId",
+        "threadId",
+        "targetArtifactId",
+        "succeeded",
+        "durationMs",
+        "completedAtMs"
+      ],
+      "properties": {
+        "verificationId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "verificationKind": { "$ref": "observability-event.schema.json#/$defs/label" },
+        "attemptId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+        "threadId": { "$ref": "observability-event.schema.json#/$defs/nullableIdentifier" },
+        "targetArtifactId": {
+          "$ref": "observability-event.schema.json#/$defs/nullableIdentifier"
+        },
+        "succeeded": { "type": "boolean" },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "completedAtMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "consumption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempts",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "cachedInputTokens",
+        "durationMs",
+        "estimatedCostMicrousd",
+        "retries",
+        "failedAttemptTokens",
+        "failedAttemptDurationMs",
+        "failedAttemptCostMicrousd"
+      ],
+      "properties": {
+        "attempts": { "type": "integer", "minimum": 0 },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "cachedInputTokens": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "estimatedCostMicrousd": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 },
+        "failedAttemptTokens": { "type": "integer", "minimum": 0 },
+        "failedAttemptDurationMs": { "type": "integer", "minimum": 0 },
+        "failedAttemptCostMicrousd": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "budgetState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["withinBudget", "exhaustedDimensions"],
+      "properties": {
+        "withinBudget": { "type": "boolean" },
+        "exhaustedDimensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["tokens", "duration", "cost", "attempts"] }
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canRetry", "canMigrate", "recommendedAction", "reason"],
+      "properties": {
+        "canRetry": { "type": "boolean" },
+        "canMigrate": { "type": "boolean" },
+        "recommendedAction": {
+          "enum": ["none", "pause", "wait", "start_attempt", "complete", "retry", "migrate"]
+        },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ CodexHome Manager treats a `CODEX_HOME` as both a **Skill Space** and an **Agent
 Desktop UI / CLI / MCP
           │
           ▼
-Registry and policy engine
+Registry, run state, and policy engine
           │
     ┌─────┼──────────────┐
     ▼     ▼              ▼
@@ -18,11 +18,17 @@ Discovery Skill router   Task router
 CODEX_HOME directories   isolated workers
 ```
 
-- `codexhome-core` contains discovery, the atomic registry, and safe Home lifecycle logic without terminal concerns.
+- `codexhome-core` contains discovery, the atomic registry, safe Home lifecycle logic, the append-only event store, and deterministic Agent Run projection without terminal concerns.
 - `codexhome-cli` is the first adapter. It keeps JSON output clean and exposes useful process exit codes.
-- Placement, execution, MCP, and desktop adapters arrive in later milestones.
+- Worktree placement, process execution, policy routing, MCP, and detailed Desktop Run adapters arrive in later milestones.
 
 The v0.2 registry is the shared boundary between CLI and the future Desktop UI. Adapters call core operations or versioned JSON commands; they do not edit the registry directly.
+
+## Agent Run state
+
+`Task -> Run -> Attempt -> Thread/Tool/Artifact/Verification` is an event-sourced lifecycle. The append-only observability JSONL file is the fact store; `codexhome agent-runs.v1` is rebuilt by deterministic replay. Mutations take one exclusive file lock, reload current facts, validate budgets and transition invariants, then append and sync before returning.
+
+A retry or migration creates another Attempt under the same `run_id`. This preserves successful cost, failed-attempt cost, route reasons, and final artifact lineage without conflating a Codex conversation with the task itself. The projection is disposable and never becomes a competing source of truth.
 
 ## Trust boundaries
 

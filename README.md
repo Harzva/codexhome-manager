@@ -8,7 +8,7 @@
 
 CodexHome Manager helps Codex power users discover, separate, label, clone, and manage multiple `CODEX_HOME` directories as isolated Skill Spaces and specialized Agent Households.
 
-> Status: v0.2 alpha. Discovery, registry aliases, specialty tags, safe Home lifecycle commands, and the connected Desktop UI work. Agent delegation, Skill placement, and MCP routing are roadmap work.
+> Status: v0.2 alpha. Discovery, registry aliases, safe Home lifecycle commands, append-only observability, durable Agent Run projections, and the connected Desktop UI work. Process execution, policy routing, Skill placement, and MCP routing remain roadmap work.
 
 ## Why
 
@@ -39,6 +39,11 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Record append-only task/run/attempt/thread observability events.
 - Aggregate token, cache, duration, retry, failure, cost, and Home health metrics.
 - Export filtered observability events as versioned JSON or analysis-ready CSV.
+- Create durable Tasks and Agent Runs without storing prompts or model responses.
+- Track retries and Home/model migrations under one `run_id`.
+- Enforce token, duration, cost, and attempt budgets before starting another attempt.
+- Attribute failed-attempt cost separately from successful work.
+- Link threads, tool calls, opaque artifacts, verification evidence, and final artifacts.
 
 ## Five-minute quickstart
 
@@ -84,6 +89,10 @@ codexhome observe record events.jsonl
 codexhome observe summary --home-id @research --json
 codexhome observe verify
 codexhome observe export --format csv --output events.csv
+codexhome task create --label "Compile benchmark" --kind coding
+codexhome run start <task-id> --max-total-tokens 300000 --max-duration-ms 5400000
+codexhome run attempt start <run-id> --home-id home-main --model gpt-5.5
+codexhome run show <run-id> --json
 ```
 
 Clone Skills, Rules, and Hooks only after reviewing the source Home:
@@ -121,9 +130,9 @@ Registry path precedence is `--registry`, then `CODEXHOME_REGISTRY`, then `~/.co
 
 `--json` writes only JSON to stdout. Progress and diagnostics must never corrupt the JSON stream. Reports exclude credential values but include local Home paths and provider hostnames, so review them before sharing publicly.
 
-The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, and the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts.
+The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, and `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`.
 
-The observability stream is append-only and excludes prompts, responses, credential values, arbitrary payloads, and raw tool arguments. See [docs/observability.md](docs/observability.md).
+The Agent Run state is projected from the same append-only observability stream, so cost analysis and lifecycle state cannot silently drift. The stream excludes prompts, responses, credential values, arbitrary payloads, raw tool arguments, and artifact paths. See [docs/observability.md](docs/observability.md) and [docs/agent-runs.md](docs/agent-runs.md).
 
 ## Security
 
@@ -157,6 +166,7 @@ For frontend-only development, use `npm run dev`. See [docs/troubleshooting.md](
 - [Registry format and lifecycle semantics](docs/registry.md)
 - [Desktop adapter contract](docs/desktop-api.md)
 - [Observability event and metric contract](docs/observability.md)
+- [Agent Run lifecycle and recovery contract](docs/agent-runs.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Product readiness audit](docs/product-readiness-v0.2.md)
 - [Security and privacy audit](docs/security-audit-v0.2.md)

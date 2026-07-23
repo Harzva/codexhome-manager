@@ -6,7 +6,7 @@ CodexHome observability uses a strict append-only event stream. It links tasks, 
 
 The default store is `~/.codexhome/observability/events.jsonl`. Override it with `--observability-store <FILE>` or `CODEXHOME_OBSERVABILITY_STORE`.
 
-Each line is one `codexhome.observability-event.v1` object. Appends take an exclusive file lock, validate the complete trace, flush data before returning, and use owner-only permissions on Unix.
+Each line is one `codexhome.observability-event.v1` object. Appends take an exclusive file lock, validate the complete trace, flush data before returning, and use owner-only permissions on Unix. Agent Run mutations perform lifecycle and budget checks under that same lock.
 
 ## Trace order
 
@@ -20,6 +20,8 @@ The minimum successful trace is:
 6. optional `run_completed` or `run_failed`
 
 IDs must be unique. Child links must reference earlier events and timestamps cannot move backwards within a run. Attempt execution events require `homeId` and `model`; health events require `homeId` and a health snapshot.
+
+Optional strict `details` fields carry only bounded orchestration metadata: task label/kind, Run budget, route reason, retry or migration source, opaque artifact/verification IDs, and final artifact IDs. They cannot carry prompts, model responses, raw tool arguments, environment dumps, or filesystem paths.
 
 ## Usage
 
@@ -36,6 +38,8 @@ codexhome observe export --format csv --output artifacts/events.csv
 
 Summary metrics include token counts, cached input tokens, cache hit/miss counts, duration, estimated cost in micro-USD, retries, terminal attempt failure rate, tools, artifacts, verifications, and latest Home health. Aggregations are available by Home, account, model, and thread.
 
+The terminal `attempt_completed` or `attempt_failed` event carries the authoritative total usage for that Attempt. Usage attached to tool or verification events is diagnostic breakdown data and is exported, but it is not added again to aggregate Run/Home/model totals. This prevents double-counting when both detailed spans and the terminal Attempt total are present.
+
 ## Safety
 
 The event schema denies unknown fields. This deliberately prevents callers from attaching prompts, model responses, environment dumps, tool arguments, cookies, tokens, or arbitrary metadata. Failure reasons are bounded and checked for obvious secret patterns.
@@ -44,5 +48,7 @@ The canonical schemas are:
 
 - [Observability event](../schemas/observability-event.schema.json)
 - [Observability summary](../schemas/observability-summary.schema.json)
+- [Agent Run projection](../schemas/agent-runs.schema.json)
+- [Agent Run mutation](../schemas/agent-run-mutation.schema.json)
 
 JSON exports use `codexhome.observability-export.v1`. CSV exports flatten stable event identity, usage, and failure columns for analysis tools.

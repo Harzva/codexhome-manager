@@ -17,6 +17,9 @@
 | `doctor` | Diagnose discovered Homes | Pass |
 | `registry list/show/path` | Read persistent registry state | Pass |
 | `home create/import/clone` | Manage Home lifecycle | Pass |
+| `observe record/summary/export/verify` | Record and analyze execution facts | Pass |
+| `task create/list/show` | Manage durable task identities | Pass |
+| `run start/list/show/...` | Track Agent Run lifecycle, budgets, recovery, and artifacts | Pass |
 
 ## Score
 

@@ -1,10 +1,28 @@
 use serde_json::Value;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
 fn binary() -> Command {
     Command::new(env!("CARGO_BIN_EXE_codexhome"))
+}
+
+fn run_json(store: &Path, args: &[&str]) -> Value {
+    let output = binary()
+        .args(args)
+        .arg("--observability-store")
+        .arg(store)
+        .arg("--json")
+        .output()
+        .expect("run codexhome JSON command");
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("valid JSON output")
 }
 
 #[test]
@@ -19,6 +37,8 @@ fn root_help_is_useful() {
     assert!(stdout.contains("registry"));
     assert!(stdout.contains("home"));
     assert!(stdout.contains("observe"));
+    assert!(stdout.contains("task"));
+    assert!(stdout.contains("run"));
     assert!(stdout.contains("--json"));
     assert!(stdout.contains("Examples:"));
 }
@@ -356,4 +376,202 @@ fn observability_record_summary_verify_and_export_form_one_cli_flow() {
     assert!(csv_contents.starts_with("schema_version,event_id"));
     assert!(csv_contents.contains("attempt_completed"));
     assert!(csv_contents.contains("gpt-test"));
+}
+
+#[test]
+fn agent_run_cli_tracks_migration_failure_cost_and_final_artifact() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = temp.path().join("state/events.jsonl");
+
+    let task = run_json(
+        &store,
+        &[
+            "task",
+            "create",
+            "--task-id",
+            "task-cli",
+            "--label",
+            "CLI lifecycle",
+            "--kind",
+            "coding",
+        ],
+    );
+    assert_eq!(task["schemaVersion"], "codexhome.agent-run-mutation.v1");
+    assert_eq!(task["taskId"], "task-cli");
+
+    run_json(
+        &store,
+        &[
+            "run",
+            "start",
+            "task-cli",
+            "--run-id",
+            "run-cli",
+            "--max-total-tokens",
+            "2000",
+            "--max-attempts",
+            "3",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "attempt",
+            "start",
+            "run-cli",
+            "--attempt-id",
+            "attempt-1",
+            "--home-id",
+            "home-a",
+            "--model",
+            "gpt-a",
+            "--route-reason",
+            "initial coding route",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "attempt",
+            "fail",
+            "run-cli",
+            "attempt-1",
+            "--input-tokens",
+            "500",
+            "--output-tokens",
+            "100",
+            "--duration-ms",
+            "900",
+            "--estimated-cost-microusd",
+            "300",
+            "--failure-code",
+            "rate_limited",
+            "--failure-reason",
+            "provider limit",
+            "--retryable",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "attempt",
+            "migrate",
+            "run-cli",
+            "attempt-1",
+            "--attempt-id",
+            "attempt-2",
+            "--home-id",
+            "home-b",
+            "--model",
+            "gpt-b",
+            "--route-reason",
+            "move away from the limited account",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "thread",
+            "link",
+            "run-cli",
+            "thread-cli",
+            "--attempt-id",
+            "attempt-2",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "artifact",
+            "record",
+            "run-cli",
+            "attempt-2",
+            "--thread-id",
+            "thread-cli",
+            "--artifact-id",
+            "artifact-cli",
+            "--artifact-kind",
+            "patch",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "verification",
+            "record",
+            "run-cli",
+            "attempt-2",
+            "--thread-id",
+            "thread-cli",
+            "--verification-id",
+            "verification-cli",
+            "--verification-kind",
+            "tests",
+            "--target-artifact-id",
+            "artifact-cli",
+            "--duration-ms",
+            "250",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "attempt",
+            "complete",
+            "run-cli",
+            "attempt-2",
+            "--thread-id",
+            "thread-cli",
+            "--input-tokens",
+            "700",
+            "--output-tokens",
+            "200",
+            "--duration-ms",
+            "1200",
+            "--estimated-cost-microusd",
+            "450",
+        ],
+    );
+    run_json(
+        &store,
+        &[
+            "run",
+            "complete",
+            "run-cli",
+            "--final-artifact-id",
+            "artifact-cli",
+        ],
+    );
+
+    let thread_summary = run_json(&store, &["observe", "summary", "--thread", "thread-cli"]);
+    assert_eq!(thread_summary["totals"]["totalTokens"], 900);
+    assert_eq!(thread_summary["totals"]["durationMs"], 1200);
+
+    let report = run_json(&store, &["run", "show", "run-cli"]);
+    assert_eq!(report["schemaVersion"], "codexhome.agent-run.v1");
+    assert_eq!(report["run"]["status"], "succeeded");
+    assert_eq!(
+        report["run"]["attempts"]
+            .as_array()
+            .expect("attempts")
+            .len(),
+        2
+    );
+    assert_eq!(report["run"]["consumption"]["totalTokens"], 1500);
+    assert_eq!(report["run"]["consumption"]["failedAttemptTokens"], 600);
+    assert_eq!(
+        report["run"]["consumption"]["failedAttemptCostMicrousd"],
+        300
+    );
+    assert_eq!(report["run"]["finalArtifactIds"][0], "artifact-cli");
+    assert_eq!(report["run"]["verifications"][0]["succeeded"], true);
+    assert_eq!(report["run"]["threadIds"][0], "thread-cli");
+    assert_eq!(report["task"]["status"], "succeeded");
 }

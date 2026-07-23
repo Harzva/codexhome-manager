@@ -10,11 +10,18 @@ All notable changes to this project will be documented in this file.
 - Dependabot for Cargo, npm, and GitHub Actions dependencies.
 - Public contribution, support, troubleshooting, release, and audit documentation.
 - Structured issue and pull request templates with credential-safety reminders.
+- Append-only observability events, token/cost summaries, and JSON/CSV export.
+- Durable Task and Agent Run projections with retry and migration lineage.
+- Token, duration, cost, and Attempt budgets with failed-attempt attribution.
+- Thread, tool, opaque artifact, verification, final-artifact, and recovery tracking.
+- Versioned `task` and `run` CLI JSON contracts and public schemas.
 
 ### Security
 
 - CI uses a read-only token and pinned external actions.
 - GitHub private vulnerability reporting replaces public security issues.
+- Agent Run events reject obvious secrets and undeclared local paths.
+- Existing event-store parent directories keep their permissions; files remain owner-only.
 
 ## [0.2.0-alpha.1]
 

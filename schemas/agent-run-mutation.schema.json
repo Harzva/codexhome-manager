@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/agent-run-mutation.schema.json",
+  "title": "CodexHome Agent Run Mutation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "action",
+    "eventId",
+    "taskId",
+    "runId",
+    "attemptId",
+    "task",
+    "run",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.agent-run-mutation.v1" },
+    "action": {
+      "enum": [
+        "create_task",
+        "start_run",
+        "start_attempt",
+        "retry_attempt",
+        "migrate_attempt",
+        "complete_attempt",
+        "fail_attempt",
+        "link_thread",
+        "record_tool",
+        "record_artifact",
+        "record_verification",
+        "complete_run",
+        "fail_run",
+        "cancel_run",
+        "timeout_run"
+      ]
+    },
+    "eventId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "taskId": { "$ref": "observability-event.schema.json#/$defs/identifier" },
+    "runId": { "$ref": "observability-event.schema.json#/$defs/nullableIdentifier" },
+    "attemptId": { "$ref": "observability-event.schema.json#/$defs/nullableIdentifier" },
+    "task": { "$ref": "agent-runs.schema.json#/$defs/task" },
+    "run": {
+      "oneOf": [
+        { "$ref": "agent-runs.schema.json#/$defs/run" },
+        { "type": "null" }
+      ]
+    },
+    "safety": { "$ref": "observability-event.schema.json#/$defs/safety" }
+  }
+}

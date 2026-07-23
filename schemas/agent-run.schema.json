@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/agent-run.schema.json",
+  "title": "CodexHome Agent Run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ok", "schemaVersion", "task", "run", "safety"],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.agent-run.v1" },
+    "task": { "$ref": "agent-runs.schema.json#/$defs/task" },
+    "run": { "$ref": "agent-runs.schema.json#/$defs/run" },
+    "safety": { "$ref": "observability-event.schema.json#/$defs/safety" }
+  }
+}
