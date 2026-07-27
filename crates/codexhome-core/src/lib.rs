@@ -492,7 +492,13 @@ fn looks_like_codex_home(path: &Path) -> bool {
             || path.join("auth.json").is_file()
             || path.join("state_5.sqlite").is_file()
             || path.join("sessions").is_dir()
-            || path.join("skills").is_dir())
+            || path.join("skills").is_dir()
+            || path.join("AGENTS.md").is_file()
+            || path.join("rules").is_dir()
+            || path.join("agents").is_dir()
+            || path.join("plugins").is_dir()
+            || path.join("mcp_servers").is_dir()
+            || path.join("mcp_servers.toml").is_file())
 }
 
 pub(crate) fn user_home() -> Option<PathBuf> {
@@ -689,6 +695,21 @@ legacy = false
         assert!(!report.homes[0].config_valid);
         assert_eq!(report.warnings.len(), 1);
         assert_eq!(report.warnings[0].code, "invalid_config");
+    }
+
+    #[test]
+    fn inspects_a_project_home_that_only_contains_rules() {
+        let temp = TempDir::new().expect("temp dir");
+        let home = temp.path().join(".codex-home/project");
+        fs::create_dir_all(home.join("rules")).expect("rules");
+        fs::write(home.join("rules/project.md"), "Project-only rule").expect("rule");
+
+        let (summary, warning) =
+            inspect_home_path(&home, "project-local").expect("pure project home");
+
+        assert_eq!(summary.source, "project-local");
+        assert_eq!(summary.rule_count, 1);
+        assert!(warning.is_none());
     }
 
     #[test]
