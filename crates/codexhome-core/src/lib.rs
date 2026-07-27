@@ -25,9 +25,9 @@ pub use agent_runs::{
     AGENT_RUN_MUTATION_SCHEMA_VERSION, AGENT_RUN_REPORT_SCHEMA_VERSION,
 };
 pub use environment::{
-    compute_skill_digest, AccountProfile, ContextFootprint, EffectiveAccountLayer,
-    EffectiveExpertLayer, EffectiveProjectLayer, EffectiveRuntimeManifest, EffectiveSkill,
-    EnvironmentResolver, ExpertPack, LegacyHome, ProjectBinding, ProjectHomeLayer,
+    compute_skill_digest, estimate_context_footprint, AccountProfile, ContextFootprint,
+    EffectiveAccountLayer, EffectiveExpertLayer, EffectiveProjectLayer, EffectiveRuntimeManifest,
+    EffectiveSkill, EnvironmentResolver, ExpertPack, LegacyHome, ProjectBinding, ProjectHomeLayer,
     RuntimeContextPressure, RuntimeContextReport, RuntimeContextSnapshot, RuntimeIsolation,
     SkillDefinition, SkillRegistry, SkillRequirement, ACCOUNT_PROFILE_SCHEMA_VERSION,
     EFFECTIVE_RUNTIME_SCHEMA_VERSION, EXPERT_PACK_SCHEMA_VERSION, LEGACY_HOME_SCHEMA_VERSION,

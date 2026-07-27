@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+
+const CONTEXT_ESTIMATE_READ_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 
 pub const ACCOUNT_PROFILE_SCHEMA_VERSION: &str = "codexhome.account-profile.v1";
 pub const LEGACY_HOME_SCHEMA_VERSION: &str = "codexhome.legacy-home.v1";
@@ -265,6 +268,239 @@ impl ContextFootprint {
         }
         Ok(())
     }
+}
+
+pub fn estimate_context_footprint(home: &Path) -> ContextFootprint {
+    let skills_root = home.join("skills");
+    ContextFootprint {
+        skill_catalog_tokens: estimate_skills_catalog_tokens(&skills_root),
+        skill_body_tokens: estimate_skills_body_tokens(&skills_root),
+        agents_tokens: estimate_agents_tokens(home),
+        rules_tokens: estimate_directory_tokens(&home.join("rules"), 4, &mut BTreeSet::new()),
+        tool_schema_tokens: estimate_tool_schema_tokens(home),
+    }
+}
+
+fn estimate_skills_catalog_tokens(root: &Path) -> u64 {
+    skill_files(root)
+        .iter()
+        .map(|path| estimate_frontmatter_tokens(path))
+        .sum()
+}
+
+fn estimate_skills_body_tokens(root: &Path) -> u64 {
+    skill_files(root)
+        .iter()
+        .map(|path| estimate_file_tokens(path))
+        .sum()
+}
+
+fn skill_files(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                let skill = path.join("SKILL.md");
+                return skill.is_file().then_some(skill);
+            }
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+                .then_some(path)
+        })
+        .collect()
+}
+
+fn estimate_agents_tokens(home: &Path) -> u64 {
+    let agents_file = home.join("AGENTS.md");
+    if agents_file.is_file() {
+        return estimate_file_tokens(&agents_file);
+    }
+    estimate_directory_tokens(&home.join("agents"), 1, &mut BTreeSet::new())
+}
+
+fn estimate_tool_schema_tokens(home: &Path) -> u64 {
+    let mut total = estimate_mcp_config_tokens(&home.join("config.toml"));
+    total = total.saturating_add(estimate_file_tokens(&home.join("mcp_servers.toml")));
+    total = total.saturating_add(estimate_file_tokens(&home.join("mcp_servers.ini")));
+    total.saturating_add(estimate_plugin_manifest_tokens(
+        &home.join("plugins"),
+        7,
+        &mut BTreeSet::new(),
+    ))
+}
+
+fn estimate_mcp_config_tokens(path: &Path) -> u64 {
+    let Ok(content) = read_limited_text(path) else {
+        return 0;
+    };
+    let Ok(value) = content.parse::<toml::Value>() else {
+        return 0;
+    };
+    value
+        .get("mcp_servers")
+        .map(ToString::to_string)
+        .map(|servers| estimate_tokens_from_text(&servers))
+        .unwrap_or(0)
+}
+
+fn estimate_plugin_manifest_tokens(
+    root: &Path,
+    max_depth: usize,
+    visited: &mut BTreeSet<PathBuf>,
+) -> u64 {
+    if max_depth == 0 || !root.is_dir() {
+        return 0;
+    }
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !visited.insert(canonical) {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_file() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(
+                name.as_ref(),
+                "plugin.json"
+                    | "plugin.toml"
+                    | ".mcp.json"
+                    | ".app.json"
+                    | "hooks.json"
+                    | "mcp_servers.toml"
+                    | "mcp_servers.ini"
+            ) {
+                total = total.saturating_add(estimate_file_tokens(&path));
+            }
+            continue;
+        }
+        if kind.is_dir() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(
+                name.as_ref(),
+                "node_modules"
+                    | "target"
+                    | "assets"
+                    | "ui"
+                    | "studio"
+                    | "scripts"
+                    | "skills"
+                    | "agents"
+                    | "commands"
+                    | "tests"
+            ) {
+                continue;
+            }
+            total = total.saturating_add(estimate_plugin_manifest_tokens(
+                &path,
+                max_depth - 1,
+                visited,
+            ));
+        }
+    }
+    total
+}
+
+fn estimate_directory_tokens(
+    root: &Path,
+    max_depth: usize,
+    visited: &mut BTreeSet<PathBuf>,
+) -> u64 {
+    if max_depth == 0 || !root.is_dir() {
+        return 0;
+    }
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !visited.insert(canonical) {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_file() {
+            total = total.saturating_add(estimate_file_tokens(&entry.path()));
+        } else if kind.is_dir() {
+            total = total.saturating_add(estimate_directory_tokens(
+                &entry.path(),
+                max_depth - 1,
+                visited,
+            ));
+        }
+    }
+    total
+}
+
+fn estimate_file_tokens(path: &Path) -> u64 {
+    read_limited_text(path)
+        .map(|text| estimate_tokens_from_text(&text))
+        .unwrap_or(0)
+}
+
+fn read_limited_text(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        bail!("not a regular file");
+    }
+    let file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(CONTEXT_ESTIMATE_READ_LIMIT_BYTES)
+        .read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn estimate_frontmatter_tokens(path: &Path) -> u64 {
+    let raw = read_limited_text(path).unwrap_or_default();
+    let compact = if let Some(start) = raw.find("---") {
+        let tail = &raw[start + 3..];
+        tail.find("---")
+            .map(|end| tail[..end].to_owned())
+            .unwrap_or_default()
+    } else {
+        let mut metadata = String::new();
+        for line in raw.lines().take(4) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("name:") || lower.starts_with("description:") {
+                metadata.push_str(trimmed);
+                metadata.push('\n');
+            }
+            if metadata.chars().count() > 240 {
+                break;
+            }
+        }
+        metadata
+    };
+    estimate_tokens_from_text(&compact)
+}
+
+fn estimate_tokens_from_text(text: &str) -> u64 {
+    text.chars().count().div_ceil(4) as u64
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1107,5 +1343,39 @@ mod tests {
         assert_eq!(snapshot.active_context_tokens(), 4_000);
         assert_eq!(snapshot.usage_basis_points(), 200);
         assert_eq!(snapshot.pressure(), RuntimeContextPressure::Notice);
+    }
+
+    #[test]
+    fn estimates_static_context_without_reading_auth_material() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path();
+        fs::create_dir_all(home.join("skills/research")).expect("skills");
+        fs::create_dir_all(home.join("rules")).expect("rules");
+        fs::write(
+            home.join("skills/research/SKILL.md"),
+            "---\nname: research\ndescription: Paper research\n---\nLong body text.",
+        )
+        .expect("skill");
+        fs::write(home.join("AGENTS.md"), "Project instructions").expect("agents");
+        fs::write(home.join("rules/default.md"), "Never expose secrets").expect("rule");
+        fs::write(
+            home.join("config.toml"),
+            "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+        )
+        .expect("config");
+        fs::write(
+            home.join("mcp_servers.toml"),
+            "[docs]\ncommand = \"docs-server\"\n",
+        )
+        .expect("mcp schema");
+        fs::write(home.join("auth.json"), "not valid text and never inspected").expect("auth");
+
+        let footprint = estimate_context_footprint(home);
+
+        assert!(footprint.skill_catalog_tokens > 0);
+        assert!(footprint.skill_body_tokens > footprint.skill_catalog_tokens);
+        assert!(footprint.agents_tokens > 0);
+        assert!(footprint.rules_tokens > 0);
+        assert!(footprint.tool_schema_tokens > 0);
     }
 }
