@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/runtime-context-report.schema.json",
+  "title": "CodexHome Runtime Context Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "snapshot",
+    "activeContextTokens",
+    "usageBasisPoints",
+    "pressure"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.runtime-context-report.v1" },
+    "snapshot": { "$ref": "runtime-context-snapshot.schema.json" },
+    "activeContextTokens": { "type": "integer", "minimum": 0 },
+    "usageBasisPoints": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "pressure": { "enum": ["healthy", "notice", "warning", "critical"] }
+  }
+}

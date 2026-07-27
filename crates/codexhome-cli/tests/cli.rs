@@ -45,7 +45,7 @@ fn root_help_is_useful() {
     let output = binary().arg("--help").output().expect("run help");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8");
-    assert!(stdout.contains("isolated Skill Spaces and Agent Households"));
+    assert!(stdout.contains("Account Profiles, Expert Packs, and Project Bindings"));
     assert!(stdout.contains("scan"));
     assert!(stdout.contains("inspect"));
     assert!(stdout.contains("doctor"));
@@ -56,8 +56,165 @@ fn root_help_is_useful() {
     assert!(stdout.contains("run"));
     assert!(stdout.contains("route"));
     assert!(stdout.contains("schedule"));
+    assert!(stdout.contains("environment"));
+    assert!(stdout.contains("projection"));
+    assert!(stdout.contains("skill"));
     assert!(stdout.contains("--json"));
     assert!(stdout.contains("Examples:"));
+}
+
+#[test]
+fn environment_resolve_and_projection_form_one_runtime_flow() {
+    let temp = TempDir::new().expect("temp dir");
+    let account_home = temp.path().join("account");
+    let project_root = temp.path().join("project");
+    let skill_source = temp.path().join("skills/research");
+    let runtime_root = temp.path().join("runtimes");
+    fs::create_dir_all(&account_home).expect("account");
+    fs::create_dir_all(&project_root).expect("project");
+    fs::create_dir_all(&skill_source).expect("skill");
+    fs::write(account_home.join("config.toml"), "model = \"test\"").expect("config");
+    fs::write(account_home.join("auth.json"), "{}").expect("auth");
+    fs::write(skill_source.join("SKILL.md"), "# Research").expect("skill");
+
+    let account_path = temp.path().join("account.json");
+    let pack_path = temp.path().join("pack.json");
+    let binding_path = temp.path().join("binding.json");
+    let registry_path = temp.path().join("skills.json");
+    let manifest_path = temp.path().join("runtime.json");
+    let skill_digest = codexhome_core::compute_skill_digest(&skill_source).expect("skill digest");
+    fs::write(
+        &account_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "codexhome.account-profile.v1",
+            "id": "account-main",
+            "label": "Main",
+            "homePath": account_home,
+            "hasAuth": true,
+            "hasConfig": true
+        }))
+        .expect("account JSON"),
+    )
+    .expect("account file");
+    fs::write(
+        &pack_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "codexhome.expert-pack.v1",
+            "id": "expert-research",
+            "label": "Research",
+            "version": "1.0.0",
+            "skills": [{"skillId": "research", "required": true}],
+            "requiresHardIsolation": true
+        }))
+        .expect("pack JSON"),
+    )
+    .expect("pack file");
+    fs::write(
+        &binding_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "codexhome.project-binding.v1",
+            "id": "binding-project",
+            "projectId": "project-test",
+            "projectRoot": project_root,
+            "accountProfileId": "account-main",
+            "expertPackIds": ["expert-research"]
+        }))
+        .expect("binding JSON"),
+    )
+    .expect("binding file");
+    fs::write(
+        &registry_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "codexhome.skill-registry.v1",
+            "revision": 1,
+            "skills": [{
+                "id": "research",
+                "label": "Research",
+                "version": "1.0.0",
+                "sourcePath": skill_source,
+                "digestSha256": skill_digest
+            }]
+        }))
+        .expect("registry JSON"),
+    )
+    .expect("registry file");
+
+    let resolved = binary()
+        .args(["environment", "resolve"])
+        .arg(&binding_path)
+        .arg("--account-profile")
+        .arg(&account_path)
+        .arg("--expert-pack")
+        .arg(&pack_path)
+        .arg("--skill-registry")
+        .arg(&registry_path)
+        .arg("--runtime-root")
+        .arg(&runtime_root)
+        .arg("--output")
+        .arg(&manifest_path)
+        .arg("--json")
+        .output()
+        .expect("resolve");
+    assert!(
+        resolved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resolved.stderr)
+    );
+    let manifest: Value = serde_json::from_slice(&resolved.stdout).expect("manifest JSON");
+    assert_eq!(manifest["schemaVersion"], "codexhome.effective-runtime.v1");
+    assert_eq!(manifest["isolation"], "hard");
+    assert_eq!(manifest["safety"]["readsAuthContents"], false);
+
+    let applied = binary()
+        .args(["projection", "apply"])
+        .arg(&manifest_path)
+        .arg("--json")
+        .output()
+        .expect("apply projection");
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let report: Value = serde_json::from_slice(&applied.stdout).expect("projection JSON");
+    assert_eq!(report["verified"], true);
+    assert!(
+        Path::new(manifest["codexHome"].as_str().expect("codexHome"))
+            .join("auth.json")
+            .is_symlink()
+    );
+
+    let context_path = temp.path().join("context.json");
+    fs::write(
+        &context_path,
+        serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": "codexhome.runtime-context-snapshot.v1",
+            "runId": "run-test",
+            "attemptId": "attempt-test",
+            "contextWindowTokens": 200000,
+            "skillCatalogTokens": 800,
+            "loadedSkillBodyTokens": 1200,
+            "agentsTokens": 400,
+            "rulesTokens": 300,
+            "toolSchemaTokens": 600,
+            "conversationHistoryTokens": 700,
+            "cachedReuseTokens": 1500,
+            "loadedSkillIds": ["research"]
+        }))
+        .expect("context JSON"),
+    )
+    .expect("context file");
+    let inspected = binary()
+        .args(["environment", "context-inspect"])
+        .arg(&context_path)
+        .arg("--json")
+        .output()
+        .expect("inspect context");
+    assert!(inspected.status.success());
+    let context: Value = serde_json::from_slice(&inspected.stdout).expect("context report");
+    assert_eq!(context["activeContextTokens"], 4000);
+    assert_eq!(context["usageBasisPoints"], 200);
+    assert_eq!(context["pressure"], "notice");
 }
 
 #[test]

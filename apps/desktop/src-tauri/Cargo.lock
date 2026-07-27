@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "codexhome-core"
-version = "0.2.0-alpha.1"
+version = "0.3.0-alpha.1"
 dependencies = [
  "anyhow",
  "fs2",
@@ -336,7 +336,7 @@ dependencies = [
 
 [[package]]
 name = "codexhome-desktop"
-version = "0.2.0-alpha.1"
+version = "0.3.0-alpha.1"
 dependencies = [
  "codexhome-core",
  "serde",

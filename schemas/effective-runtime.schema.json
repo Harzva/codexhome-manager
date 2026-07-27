@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/effective-runtime.schema.json",
+  "title": "CodexHome Effective Runtime Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "manifestId",
+    "account",
+    "experts",
+    "project",
+    "isolation",
+    "runtimeRoot",
+    "codexHome",
+    "skills",
+    "agentsFiles",
+    "ruleFiles",
+    "mcpServerIds",
+    "context",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.effective-runtime.v1" },
+    "manifestId": { "type": "string", "pattern": "^runtime-[a-f0-9]{16}$" },
+    "account": { "$ref": "#/$defs/account" },
+    "experts": { "type": "array", "items": { "$ref": "#/$defs/expert" } },
+    "project": { "$ref": "#/$defs/project" },
+    "isolation": { "enum": ["shared_account_home", "hard"] },
+    "runtimeRoot": { "type": "string", "minLength": 1 },
+    "codexHome": { "type": "string", "minLength": 1 },
+    "skills": { "type": "array", "items": { "$ref": "#/$defs/skill" } },
+    "agentsFiles": { "$ref": "expert-pack.schema.json#/$defs/paths" },
+    "ruleFiles": { "$ref": "expert-pack.schema.json#/$defs/paths" },
+    "mcpServerIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "account-profile.schema.json#/$defs/id" }
+    },
+    "context": { "$ref": "expert-pack.schema.json#/$defs/context" },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "secretsRedacted",
+        "includesSecrets",
+        "readsAuthContents",
+        "includesLocalPaths"
+      ],
+      "properties": {
+        "secretsRedacted": { "const": true },
+        "includesSecrets": { "const": false },
+        "readsAuthContents": { "const": false },
+        "includesLocalPaths": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "account": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "homePath", "hasAuth", "hasConfig"],
+      "properties": {
+        "id": { "$ref": "account-profile.schema.json#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "homePath": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "endpointHost": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "hasAuth": { "type": "boolean" },
+        "hasConfig": { "type": "boolean" }
+      }
+    },
+    "expert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "version", "capabilities"],
+      "properties": {
+        "id": { "$ref": "account-profile.schema.json#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "projectId", "projectRoot", "hasProjectHome"],
+      "properties": {
+        "id": { "$ref": "account-profile.schema.json#/$defs/id" },
+        "projectId": { "$ref": "account-profile.schema.json#/$defs/id" },
+        "projectRoot": { "type": "string", "minLength": 1 },
+        "hasProjectHome": { "type": "boolean" }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "version",
+        "sourcePath",
+        "targetPath",
+        "digestSha256",
+        "required"
+      ],
+      "properties": {
+        "id": { "$ref": "account-profile.schema.json#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "targetPath": { "type": "string", "minLength": 1 },
+        "digestSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+        "required": { "type": "boolean" }
+      }
+    }
+  }
+}

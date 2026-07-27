@@ -6,9 +6,13 @@ This repository is the generic, public-safe implementation of CodexHome Manager.
 
 ## Product boundaries
 
-- A `CODEX_HOME` is an isolated runtime and Skill Space.
-- An Agent Household is an optional orchestration layer over one Home.
-- The manager discovers, validates, launches, and delegates; it does not copy authentication material between Homes.
+- An Account Profile owns auth, provider, model, endpoint, and base config only.
+- An Expert Pack owns reusable Skills, Rules, AGENTS instructions, MCP declarations, and context estimates.
+- A Project Binding may add project-local capability overrides, but never credentials.
+- An Effective Runtime Manifest is the only authoritative resolved Account + Expert + Project view.
+- A legacy `CODEX_HOME` is supported through `LegacyHome`; new features must not extend the legacy shape.
+- An Agent Household is orchestration over one or more Expert Packs and always uses a hard-isolated runtime.
+- The manager discovers, validates, projects, launches, and delegates; it does not copy authentication material between Homes.
 - Public manifests may contain capability metadata and local reference placeholders, never credentials or private local paths.
 
 ## Safety
@@ -25,6 +29,7 @@ This repository is the generic, public-safe implementation of CodexHome Manager.
 - Human output and `--json` output are separate stable contracts.
 - Add tests for happy paths, malformed configuration, missing paths, and secret redaction.
 - Prefer additive schema evolution and version every serialized contract.
+- Runtime Projection must be dry-run-first, target only manager-owned roots, and never copy authentication material.
 - Keep macOS, Linux, and Windows behavior explicit; do not silently replace one platform path with another.
 
 ## Publishing

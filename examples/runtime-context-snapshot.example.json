@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "codexhome.runtime-context-snapshot.v1",
+  "runId": "run-example",
+  "attemptId": "attempt-example",
+  "contextWindowTokens": 200000,
+  "skillCatalogTokens": 800,
+  "loadedSkillBodyTokens": 1200,
+  "agentsTokens": 400,
+  "rulesTokens": 300,
+  "toolSchemaTokens": 600,
+  "conversationHistoryTokens": 700,
+  "cachedReuseTokens": 1500,
+  "loadedSkillIds": ["arxiv"]
+}

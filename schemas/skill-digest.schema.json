@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/skill-digest.schema.json",
+  "title": "CodexHome Skill Digest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "sourcePath",
+    "digestSha256",
+    "includesLocalPaths"
+  ],
+  "properties": {
+    "ok": { "const": true },
+    "schemaVersion": { "const": "codexhome.skill-digest.v1" },
+    "sourcePath": { "type": "string", "minLength": 1 },
+    "digestSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+    "includesLocalPaths": { "const": true }
+  }
+}

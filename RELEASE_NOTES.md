@@ -1,5 +1,25 @@
 # Release Notes
 
+## 0.3.0-alpha.1
+
+CodexHome Manager now composes account identity, reusable expertise, and project-local capability without cloning a complete `CODEX_HOME` for every combination.
+
+Highlights:
+
+- `AccountProfile`, `ExpertPack`, `ProjectBinding`, `LegacyHome`, and `EffectiveRuntimeManifest` in `codexhome-core`;
+- Skill Registry entries with logical IDs, versions, source digests, and context estimates;
+- `environment resolve` plus Runtime Projection plan/apply/verify/clean commands;
+- hard-isolated runtimes for Agent Households and isolation-required Expert Packs;
+- Account auth/config links without credential reads or copies;
+- project-local auth rejection, manager-owned target checks, rollback, and required-Skill fail-closed behavior;
+- bounded worktree test execution with a configurable timeout.
+
+Alpha limits:
+
+- process launch adapters and remote Expert/Skill package distribution are not included;
+- runtime context snapshots depend on launch adapters reporting actual loaded Skills and token composition;
+- no signed binary packages are published yet.
+
 ## 0.2.0-alpha.1
 
 CodexHome Manager now turns discovered `CODEX_HOME` directories into a persistent registry of specialized Agent Households.

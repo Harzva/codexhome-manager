@@ -116,6 +116,7 @@ one test command without a shell:
 codexhome run worktree evidence <run-id> <attempt-id> \
   --evidence-id evidence-1 \
   --test-label "workspace tests" \
+  --test-timeout-ms 900000 \
   --test-program cargo -- test --workspace
 ```
 
@@ -123,7 +124,8 @@ The evidence records base/HEAD commits, commit count, patch and test-log
 SHA-256, changed-file and line statistics, exit code, duration, and clean-tree
 state. Patch and test log are owner-only local sidecars; prompts, model
 responses, raw tool arguments, and test command arguments are not appended to
-the event stream.
+the event stream. Tests are terminated after `--test-timeout-ms` (15 minutes by
+default, 24 hours maximum), and timeout is recorded as failed evidence.
 
 Complete the Attempt, then use a different Home as the main reviewer:
 

@@ -7,8 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod agent_runs;
+mod environment;
 mod home;
 mod observability;
+mod projection;
 mod registry;
 mod router;
 mod scheduler;
@@ -21,6 +23,16 @@ pub use agent_runs::{
     AgentWorktreeReviewView, AgentWorktreeView, AttemptLifecycleStatus, RunBudgetState,
     RunConsumption, RunLifecycleStatus, RunRecovery, TaskLifecycleStatus,
     AGENT_RUN_MUTATION_SCHEMA_VERSION, AGENT_RUN_REPORT_SCHEMA_VERSION,
+};
+pub use environment::{
+    compute_skill_digest, AccountProfile, ContextFootprint, EffectiveAccountLayer,
+    EffectiveExpertLayer, EffectiveProjectLayer, EffectiveRuntimeManifest, EffectiveSkill,
+    EnvironmentResolver, ExpertPack, LegacyHome, ProjectBinding, ProjectHomeLayer,
+    RuntimeContextPressure, RuntimeContextReport, RuntimeContextSnapshot, RuntimeIsolation,
+    SkillDefinition, SkillRegistry, SkillRequirement, ACCOUNT_PROFILE_SCHEMA_VERSION,
+    EFFECTIVE_RUNTIME_SCHEMA_VERSION, EXPERT_PACK_SCHEMA_VERSION, LEGACY_HOME_SCHEMA_VERSION,
+    PROJECT_BINDING_SCHEMA_VERSION, RUNTIME_CONTEXT_REPORT_SCHEMA_VERSION,
+    RUNTIME_CONTEXT_SNAPSHOT_SCHEMA_VERSION, SKILL_REGISTRY_SCHEMA_VERSION,
 };
 pub use home::{CopySummary, HomeManager, HomeMutationResult};
 pub use observability::{
@@ -37,6 +49,10 @@ pub use observability::{
     WorktreeReviewDetails, OBSERVABILITY_EVENT_SCHEMA_VERSION, OBSERVABILITY_EXPORT_SCHEMA_VERSION,
     OBSERVABILITY_SUMMARY_SCHEMA_VERSION, OBSERVABILITY_VERIFY_SCHEMA_VERSION,
     SCHEDULER_JOB_SCHEMA_VERSION,
+};
+pub use projection::{
+    ProjectionEntry, ProjectionEntryKind, ProjectionMode, ProjectionOperation, RuntimeProjection,
+    RuntimeProjectionReport, RUNTIME_PROJECTION_SCHEMA_VERSION,
 };
 pub use registry::{
     normalize_alias, normalize_specialties, RegisteredHomeView, Registry, RegistryEntry,
@@ -60,8 +76,9 @@ pub use scheduler::{
 pub use worktree::{
     GitWorktreeManager, WorktreeAssignment, WorktreeConflictOptions, WorktreeConflictReport,
     WorktreeEvidenceOptions, WorktreeEvidenceReport, WorktreePlan, WorktreePrepareOptions,
-    WorktreePrepareReport, WORKTREE_CONFLICT_SCHEMA_VERSION, WORKTREE_EVIDENCE_SCHEMA_VERSION,
-    WORKTREE_PLAN_SCHEMA_VERSION, WORKTREE_PREPARE_SCHEMA_VERSION,
+    WorktreePrepareReport, DEFAULT_TEST_TIMEOUT_MS, WORKTREE_CONFLICT_SCHEMA_VERSION,
+    WORKTREE_EVIDENCE_SCHEMA_VERSION, WORKTREE_PLAN_SCHEMA_VERSION,
+    WORKTREE_PREPARE_SCHEMA_VERSION,
 };
 
 pub const DISCOVERY_SCHEMA_VERSION: &str = "codexhome.discovery.v1";
@@ -120,7 +137,7 @@ pub struct DiscoveryWarning {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SafetySummary {
     pub secrets_redacted: bool,
