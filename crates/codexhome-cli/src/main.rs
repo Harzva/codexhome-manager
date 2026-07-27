@@ -1,22 +1,25 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use codexhome_core::{
-    discover, doctor, generate_id, observability_events_csv, parse_observability_events,
-    parse_route_request, parse_scheduler_job, AgentRunAction, AgentRunMutationReport,
-    AgentRunReport, AgentRunStore, AgentRunView, AttemptTransition, AttemptTransitionKind,
-    CodexHomeSummary, DiscoveryOptions, DiscoveryReport, ExecutionIdentity, FailureInfo,
+    compute_skill_digest, discover, doctor, generate_id, observability_events_csv,
+    parse_observability_events, parse_route_request, parse_scheduler_job, AccountProfile,
+    AgentRunAction, AgentRunMutationReport, AgentRunReport, AgentRunStore, AgentRunView,
+    AttemptTransition, AttemptTransitionKind, CodexHomeSummary, DiscoveryOptions, DiscoveryReport,
+    EffectiveRuntimeManifest, EnvironmentResolver, ExecutionIdentity, ExpertPack, FailureInfo,
     GitWorktreeManager, HomeManager, HomeMutationResult, ObservabilityFilter, ObservabilityStatus,
-    ObservabilityStore, ObservabilitySummary, RegisteredHomeView, RegistryReport, RegistryStore,
-    RouteDecision, RouteEngine, RouteHomeState, RoutePolicyStore, RunBudget, SafetySummary,
-    SchedulerDispatchReport, SchedulerJobView, SchedulerMutationReport, SchedulerPolicyStore,
-    SchedulerReport, SchedulerStore, SchedulerTickReport, UsageDelta, WorktreeAssignment,
+    ObservabilityStore, ObservabilitySummary, ProjectBinding, ProjectionMode, RegisteredHomeView,
+    RegistryReport, RegistryStore, RouteDecision, RouteEngine, RouteHomeState, RoutePolicyStore,
+    RunBudget, RuntimeContextSnapshot, RuntimeProjection, SafetySummary, SchedulerDispatchReport,
+    SchedulerJobView, SchedulerMutationReport, SchedulerPolicyStore, SchedulerReport,
+    SchedulerStore, SchedulerTickReport, SkillRegistry, UsageDelta, WorktreeAssignment,
     WorktreeConflictDisposition, WorktreeConflictOptions, WorktreeEvidenceOptions, WorktreePlan,
     WorktreePrepareOptions, WorktreePreparedDetails, WorktreeReviewDecision, WorktreeReviewDetails,
-    WORKTREE_PLAN_SCHEMA_VERSION,
+    DEFAULT_TEST_TIMEOUT_MS, WORKTREE_PLAN_SCHEMA_VERSION,
 };
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -25,8 +28,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[command(
     name = "codexhome",
     version,
-    about = "Discover and manage specialized Codex Homes",
-    long_about = "Discover, register, and manage multiple CODEX_HOME directories as isolated Skill Spaces and Agent Households.\n\nCredential contents are never included in command output.",
+    about = "Compose and manage effective Codex environments",
+    long_about = "Compose Account Profiles, Expert Packs, and Project Bindings into effective Codex environments while preserving legacy CODEX_HOME workflows.\n\nCredential contents are never included in command output.",
     after_help = "Examples:\n  codexhome scan\n  codexhome registry list\n  codexhome task create --label 'Compile benchmark'\n  codexhome run start task-123 --max-total-tokens 300000\n  codexhome route recommend request.json --json\n  codexhome route decide request.json --run-id run-123 --json\n  codexhome schedule enqueue scheduler-job.json\n  codexhome schedule dispatch --job-id job-123 --json\n  codexhome run attempt start run-123 --home-id home-main --model gpt-5.5\n  codexhome observe summary --home-id @research --json"
 )]
 struct Cli {
@@ -113,6 +116,125 @@ enum Command {
         #[command(subcommand)]
         command: ScheduleCommand,
     },
+
+    /// Resolve Account, Expert, and Project layers into one immutable runtime manifest.
+    Environment {
+        #[command(subcommand)]
+        command: EnvironmentCommand,
+    },
+
+    /// Plan, apply, verify, or clean a Skill and account runtime projection.
+    Projection {
+        #[command(subcommand)]
+        command: ProjectionCommand,
+    },
+
+    /// Compute Skill digests and validate Skill Registry files.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SkillCommand {
+    /// Compute the deterministic digest stored by a Skill Registry entry.
+    Digest {
+        #[arg(value_name = "SKILL_DIRECTORY")]
+        source: PathBuf,
+    },
+    /// Validate a Skill Registry JSON file.
+    Validate {
+        #[arg(value_name = "REGISTRY")]
+        registry: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EnvironmentCommand {
+    /// Resolve public-safe JSON inputs into an Effective Runtime Manifest.
+    Resolve {
+        /// Project Binding JSON file.
+        #[arg(value_name = "FILE")]
+        binding: PathBuf,
+        /// Account Profile JSON file; repeat to provide more than one.
+        #[arg(long = "account-profile", value_name = "FILE", required = true)]
+        account_profiles: Vec<PathBuf>,
+        /// Expert Pack JSON file; repeat for all packs referenced by the binding.
+        #[arg(long = "expert-pack", value_name = "FILE")]
+        expert_packs: Vec<PathBuf>,
+        /// Skill Registry JSON file.
+        #[arg(long = "skill-registry", value_name = "FILE")]
+        skill_registry: PathBuf,
+        /// Absolute manager-owned root for hard-isolated runtime directories.
+        #[arg(long, value_name = "PATH")]
+        runtime_root: PathBuf,
+        /// Also write the resolved manifest to this file.
+        #[arg(long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// Replace an existing output file.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Validate a real run snapshot and compute context pressure for Run Inspector.
+    ContextInspect {
+        #[arg(value_name = "SNAPSHOT")]
+        snapshot: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectionCommand {
+    /// Show every filesystem operation without changing files.
+    Plan {
+        #[arg(value_name = "MANIFEST")]
+        manifest: PathBuf,
+        #[arg(long, value_enum, default_value_t = ProjectionModeArg::Symlink)]
+        mode: ProjectionModeArg,
+    },
+    /// Materialize a previously resolved runtime manifest.
+    Apply {
+        #[arg(value_name = "MANIFEST")]
+        manifest: PathBuf,
+        #[arg(long, value_enum, default_value_t = ProjectionModeArg::Symlink)]
+        mode: ProjectionModeArg,
+        #[arg(long)]
+        dry_run: bool,
+        /// Allow replacement after reviewing the projection plan.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Verify that all projected entries match their sources.
+    Verify {
+        #[arg(value_name = "MANIFEST")]
+        manifest: PathBuf,
+        #[arg(long, value_enum, default_value_t = ProjectionModeArg::Symlink)]
+        mode: ProjectionModeArg,
+    },
+    /// Remove only paths owned by this manifest.
+    Clean {
+        #[arg(value_name = "MANIFEST")]
+        manifest: PathBuf,
+        #[arg(long, value_enum, default_value_t = ProjectionModeArg::Symlink)]
+        mode: ProjectionModeArg,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProjectionModeArg {
+    Symlink,
+    Copy,
+}
+
+impl From<ProjectionModeArg> for ProjectionMode {
+    fn from(value: ProjectionModeArg) -> Self {
+        match value {
+            ProjectionModeArg::Symlink => Self::Symlink,
+            ProjectionModeArg::Copy => Self::Copy,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -470,6 +592,9 @@ enum WorktreeCommand {
         test_label: String,
         #[arg(long)]
         test_program: String,
+        /// Maximum test runtime before the child process is terminated.
+        #[arg(long, default_value_t = DEFAULT_TEST_TIMEOUT_MS)]
+        test_timeout_ms: u64,
         #[arg(last = true)]
         test_args: Vec<String>,
     },
@@ -998,7 +1123,164 @@ fn run(cli: Cli) -> Result<ExitCode> {
             observability_store,
             json,
         ),
+        Command::Environment { command } => run_environment(command, json),
+        Command::Projection { command } => run_projection(command, json),
+        Command::Skill { command } => run_skill(command, json),
     }
+}
+
+fn run_skill(command: SkillCommand, json: bool) -> Result<ExitCode> {
+    match command {
+        SkillCommand::Digest { source } => {
+            let source = source
+                .canonicalize()
+                .with_context(|| format!("failed to resolve Skill source {}", source.display()))?;
+            let digest = compute_skill_digest(&source)?;
+            let report = json!({
+                "ok": true,
+                "schemaVersion": "codexhome.skill-digest.v1",
+                "sourcePath": source.to_string_lossy(),
+                "digestSha256": digest,
+                "includesLocalPaths": true,
+            });
+            output(json, &report, || {
+                println!("{digest}  {}", source.display());
+            })?;
+        }
+        SkillCommand::Validate { registry } => {
+            let registry: SkillRegistry = read_json_file(&registry)?;
+            registry.validate()?;
+            let report = json!({
+                "ok": true,
+                "schemaVersion": "codexhome.skill-registry-report.v1",
+                "revision": registry.revision,
+                "skillCount": registry.skills.len(),
+                "includesLocalPaths": true,
+            });
+            output(json, &report, || {
+                println!(
+                    "Skill Registry revision {}: {} entries.",
+                    registry.revision,
+                    registry.skills.len()
+                );
+            })?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_environment(command: EnvironmentCommand, json: bool) -> Result<ExitCode> {
+    match command {
+        EnvironmentCommand::Resolve {
+            binding,
+            account_profiles,
+            expert_packs,
+            skill_registry,
+            runtime_root,
+            output: output_path,
+            force,
+        } => {
+            let binding: ProjectBinding = read_json_file(&binding)?;
+            let accounts = account_profiles
+                .iter()
+                .map(|path| read_json_file::<AccountProfile>(path))
+                .collect::<Result<Vec<_>>>()?;
+            let packs = expert_packs
+                .iter()
+                .map(|path| read_json_file::<ExpertPack>(path))
+                .collect::<Result<Vec<_>>>()?;
+            let skills: SkillRegistry = read_json_file(&skill_registry)?;
+            let manifest =
+                EnvironmentResolver::resolve(&binding, &accounts, &packs, &skills, &runtime_root)?;
+            if let Some(path) = output_path {
+                write_json_file(&path, &manifest, force)?;
+            }
+            output(json, &manifest, || print_effective_runtime(&manifest))?;
+        }
+        EnvironmentCommand::ContextInspect { snapshot } => {
+            let snapshot: RuntimeContextSnapshot = read_json_file(&snapshot)?;
+            let report = snapshot.report()?;
+            output(json, &report, || {
+                println!(
+                    "{} / {} tokens ({:.2}%, {:?})",
+                    report.active_context_tokens,
+                    report.snapshot.context_window_tokens,
+                    f64::from(report.usage_basis_points) / 100.0,
+                    report.pressure
+                );
+                println!(
+                    "Loaded Skills: {} · cached reuse: {} tokens",
+                    report.snapshot.loaded_skill_ids.len(),
+                    report.snapshot.cached_reuse_tokens
+                );
+            })?;
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_projection(command: ProjectionCommand, json: bool) -> Result<ExitCode> {
+    let (manifest_path, mode, operation) = match command {
+        ProjectionCommand::Plan { manifest, mode } => (manifest, mode.into(), "plan"),
+        ProjectionCommand::Apply {
+            manifest,
+            mode,
+            dry_run: true,
+            ..
+        } => (manifest, mode.into(), "plan"),
+        ProjectionCommand::Apply {
+            manifest,
+            mode,
+            dry_run: false,
+            force: false,
+        } => (manifest, mode.into(), "apply"),
+        ProjectionCommand::Apply {
+            manifest,
+            mode,
+            dry_run: false,
+            force: true,
+        } => (manifest, mode.into(), "apply-force"),
+        ProjectionCommand::Verify { manifest, mode } => (manifest, mode.into(), "verify"),
+        ProjectionCommand::Clean {
+            manifest,
+            mode,
+            dry_run: true,
+        } => (manifest, mode.into(), "clean-dry-run"),
+        ProjectionCommand::Clean {
+            manifest,
+            mode,
+            dry_run: false,
+        } => (manifest, mode.into(), "clean"),
+    };
+    let manifest: EffectiveRuntimeManifest = read_json_file(&manifest_path)?;
+    let report = match operation {
+        "plan" => RuntimeProjection::plan(&manifest, mode)?,
+        "apply" => RuntimeProjection::apply(&manifest, mode, false, false)?,
+        "apply-force" => RuntimeProjection::apply(&manifest, mode, false, true)?,
+        "verify" => RuntimeProjection::verify(&manifest, mode)?,
+        "clean-dry-run" => RuntimeProjection::clean(&manifest, mode, true)?,
+        "clean" => RuntimeProjection::clean(&manifest, mode, false)?,
+        _ => unreachable!("projection operation is exhaustive"),
+    };
+    output(json, &report, || {
+        println!(
+            "Projection {}: {} entries, verified={}.",
+            report.manifest_id,
+            report.entries.len(),
+            report.verified
+        );
+        for entry in &report.entries {
+            println!(
+                "  {:?}: {} -> {} ({:?})",
+                entry.operation, entry.source_path, entry.target_path, entry.mode
+            );
+        }
+    })?;
+    Ok(if report.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 fn discovery(additional_homes: Vec<PathBuf>) -> Result<DiscoveryReport> {
@@ -1499,6 +1781,7 @@ fn run_worktree_command(
             evidence_root,
             test_label,
             test_program,
+            test_timeout_ms,
             test_args,
         } => {
             let report = store.report()?;
@@ -1519,6 +1802,7 @@ fn run_worktree_command(
                     test_label,
                     test_program,
                     test_args,
+                    test_timeout_ms,
                 },
             )?;
             let mutation = store.apply(AgentRunAction::RecordWorktreeEvidence {
@@ -2165,12 +2449,106 @@ fn read_observability_input(input: &str) -> Result<String> {
     }
 }
 
+fn read_json_file<T: DeserializeOwned>(path: &std::path::Path) -> Result<T> {
+    let contents =
+        fs::read(path).with_context(|| format!("failed to read JSON input {}", path.display()))?;
+    serde_json::from_slice(&contents)
+        .with_context(|| format!("failed to parse JSON input {}", path.display()))
+}
+
+fn write_json_file(
+    path: &std::path::Path,
+    value: &impl serde::Serialize,
+    force: bool,
+) -> Result<()> {
+    if path.exists() && !force {
+        bail!(
+            "output {} already exists; pass --force to replace it",
+            path.display()
+        );
+    }
+    let parent = path
+        .parent()
+        .context("output path has no parent directory")?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+    let encoded = serde_json::to_vec_pretty(value).context("failed to encode JSON output")?;
+    let temp_path = parent.join(format!(
+        ".codexhome-{}.tmp",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before Unix epoch")?
+            .as_nanos()
+    ));
+    let mut temp = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)
+        .with_context(|| format!("failed to create temporary output {}", temp_path.display()))?;
+    let write_result = (|| -> Result<()> {
+        temp.write_all(&encoded)?;
+        temp.write_all(b"\n")?;
+        temp.sync_all()?;
+        let backup_path = parent.join(format!(
+            ".codexhome-output-backup-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock is before Unix epoch")?
+                .as_nanos()
+        ));
+        let staged_backup = if path.exists() {
+            fs::rename(path, &backup_path)
+                .with_context(|| format!("failed to stage output {}", path.display()))?;
+            true
+        } else {
+            false
+        };
+        if let Err(error) = fs::rename(&temp_path, path) {
+            if staged_backup {
+                let _ = fs::rename(&backup_path, path);
+            }
+            return Err(error)
+                .with_context(|| format!("failed to commit output {}", path.display()));
+        }
+        if staged_backup {
+            fs::remove_file(&backup_path).with_context(|| {
+                format!("failed to remove output backup {}", backup_path.display())
+            })?;
+        }
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result
+}
+
 fn output(value_is_json: bool, value: &impl serde::Serialize, human: impl FnOnce()) -> Result<()> {
     if value_is_json {
         print_json(value)
     } else {
         human();
         Ok(())
+    }
+}
+
+fn print_effective_runtime(manifest: &EffectiveRuntimeManifest) {
+    println!(
+        "{}: account={} experts={} project={} isolation={:?}",
+        manifest.manifest_id,
+        manifest.account.label,
+        manifest.experts.len(),
+        manifest.project.project_id,
+        manifest.isolation
+    );
+    println!("  CODEX_HOME: {}", manifest.codex_home);
+    println!(
+        "  Skills: {} · Context estimate: {} tokens",
+        manifest.skills.len(),
+        manifest.context.total_tokens()
+    );
+    if !manifest.project.has_project_home {
+        println!("  Project Home: default only (no project-local override)");
     }
 }
 

@@ -121,7 +121,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codexhome-cli"
-version = "0.2.0-alpha.1"
+version = "0.3.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "codexhome-core"
-version = "0.2.0-alpha.1"
+version = "0.3.0-alpha.1"
 dependencies = [
  "anyhow",
  "fs2",

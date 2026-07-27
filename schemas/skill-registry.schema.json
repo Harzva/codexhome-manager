@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/skill-registry.schema.json",
+  "title": "CodexHome Skill Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "revision", "skills"],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.skill-registry.v1" },
+    "revision": { "type": "integer", "minimum": 0 },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "version",
+          "sourcePath",
+          "digestSha256"
+        ],
+        "properties": {
+          "id": { "$ref": "account-profile.schema.json#/$defs/id" },
+          "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+          "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "sourcePath": { "type": "string", "minLength": 1 },
+          "digestSha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" },
+          "catalogTokens": { "type": "integer", "minimum": 0 },
+          "bodyTokens": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

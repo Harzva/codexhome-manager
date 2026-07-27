@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "codexhome.expert-pack.v1",
+  "id": "expert-research",
+  "label": "Research",
+  "version": "1.0.0",
+  "description": "Reusable research capabilities without account credentials.",
+  "capabilities": ["paper-search", "latex"],
+  "skills": [
+    { "skillId": "arxiv", "required": true }
+  ],
+  "agentsFiles": [],
+  "ruleFiles": [],
+  "mcpServerIds": ["notebook"],
+  "requiresHardIsolation": true,
+  "context": {
+    "agentsTokens": 600,
+    "toolSchemaTokens": 900
+  }
+}

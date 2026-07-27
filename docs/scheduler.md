@@ -99,6 +99,11 @@ reconcile the worker, then use `recover-retry` to close the expired Attempt with
 authoritative usage and append `scheduler_recovery_resolved`. Normal retry and
 migration lineage remains visible under the same `runId`.
 
+A Run with a prepared worktree is intentionally excluded from automatic
+`recover-retry`: its branch, evidence lineage, and external worker state must be
+reconciled, then a new Run must be created through an explicit replan. This is a
+safety policy, not a transient scheduler failure.
+
 Jobs that exceed failure, budget, dispatch, or dependency safety thresholds can
 be automatically paused. Cancellation and timeout close any active Attempt,
 record terminal usage, append the Scheduler terminal event, and terminate the Run.

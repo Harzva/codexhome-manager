@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "codexhome.skill-registry.v1",
+  "revision": 1,
+  "skills": [
+    {
+      "id": "arxiv",
+      "label": "arXiv",
+      "version": "1.0.0",
+      "sourcePath": "/opt/codexhome/skills/arxiv",
+      "digestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "catalogTokens": 120,
+      "bodyTokens": 950
+    }
+  ]
+}

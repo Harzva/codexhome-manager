@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/account-profile.schema.json",
+  "title": "CodexHome Account Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "label", "homePath", "hasAuth", "hasConfig"],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.account-profile.v1" },
+    "id": { "$ref": "#/$defs/id" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "homePath": { "type": "string", "minLength": 1 },
+    "provider": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "model": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "endpointHost": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9.-]+$",
+      "maxLength": 253
+    },
+    "hasAuth": { "type": "boolean" },
+    "hasConfig": { "type": "boolean" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{1,95}$"
+    }
+  }
+}

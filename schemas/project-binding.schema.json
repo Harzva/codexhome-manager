@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/project-binding.schema.json",
+  "title": "CodexHome Project Binding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "projectId",
+    "projectRoot",
+    "accountProfileId"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.project-binding.v1" },
+    "id": { "$ref": "account-profile.schema.json#/$defs/id" },
+    "projectId": { "$ref": "account-profile.schema.json#/$defs/id" },
+    "projectRoot": { "type": "string", "minLength": 1 },
+    "accountProfileId": { "$ref": "account-profile.schema.json#/$defs/id" },
+    "expertPackIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "account-profile.schema.json#/$defs/id" }
+    },
+    "projectHome": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "expert-pack.schema.json#/$defs/skillRequirement" }
+        },
+        "agentsFiles": { "$ref": "expert-pack.schema.json#/$defs/paths" },
+        "ruleFiles": { "$ref": "expert-pack.schema.json#/$defs/paths" },
+        "mcpServerIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "account-profile.schema.json#/$defs/id" }
+        },
+        "context": { "$ref": "expert-pack.schema.json#/$defs/context" }
+      }
+    },
+    "isolation": { "enum": ["shared_account_home", "hard"] }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/expert-pack.schema.json",
+  "title": "CodexHome Expert Pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "label", "version"],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.expert-pack.v1" },
+    "id": { "$ref": "#/$defs/id" },
+    "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "description": { "type": "string", "maxLength": 2000 },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 160 }
+    },
+    "skills": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/skillRequirement" }
+    },
+    "agentsFiles": { "$ref": "#/$defs/paths" },
+    "ruleFiles": { "$ref": "#/$defs/paths" },
+    "mcpServerIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "requiresHardIsolation": { "type": "boolean" },
+    "context": { "$ref": "#/$defs/context" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{1,95}$"
+    },
+    "skillRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skillId"],
+      "properties": {
+        "skillId": { "$ref": "#/$defs/id" },
+        "required": { "type": "boolean", "default": true }
+      }
+    },
+    "paths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skillCatalogTokens": { "type": "integer", "minimum": 0 },
+        "skillBodyTokens": { "type": "integer", "minimum": 0 },
+        "agentsTokens": { "type": "integer", "minimum": 0 },
+        "rulesTokens": { "type": "integer", "minimum": 0 },
+        "toolSchemaTokens": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

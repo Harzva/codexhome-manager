@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Account Profile, Expert Pack, Project Binding, and Effective Runtime Manifest Core models.
+- Backward-compatible `LegacyHome` projection for v0.2 registry entries.
+- Versioned Skill Registry with logical IDs, digests, versions, and static context estimates.
+- Real Runtime Projection plan/apply/verify/clean lifecycle with rollback and managed-root checks.
+- Deterministic Skill tree digest verification before every projection.
+- Hard-isolated Expert/Household runtimes that link Account auth/config without reading or copying credentials.
+- Public JSON Schemas, examples, CLI commands, and end-to-end tests for environment composition.
+- Bounded worktree evidence test execution with configurable timeout.
+
 - Three-platform Rust CI plus Desktop frontend and macOS Tauri bridge checks.
 - Dependabot for Cargo, npm, and GitHub Actions dependencies.
 - Public contribution, support, troubleshooting, release, and audit documentation.

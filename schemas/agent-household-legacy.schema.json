@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/agent-household-legacy.schema.json",
+  "title": "Legacy CodexHome Agent Household Manifest",
+  "description": "Deprecated v1alpha1 contract retained for compatibility. New households reference Expert Packs and hard-isolated runtimes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "alias", "home", "specialties", "members", "policy"],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.household.v1alpha1" },
+    "alias": { "type": "string", "pattern": "^@[a-z][a-z0-9-]{1,31}$" },
+    "home": { "type": "string", "minLength": 1 },
+    "specialties": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "template"],
+        "properties": {
+          "role": { "enum": ["planner", "executor", "tester", "reviewer"] },
+          "template": { "type": "string", "minLength": 1 },
+          "maxParallel": { "type": "integer", "minimum": 1, "maximum": 16 }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxDepth", "requireReview", "credentialPropagation"],
+      "properties": {
+        "maxDepth": { "const": 2 },
+        "requireReview": { "type": "boolean" },
+        "credentialPropagation": { "const": false }
+      }
+    }
+  }
+}

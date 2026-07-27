@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "codexhome.account-profile.v1",
+  "id": "account-main",
+  "label": "Main account",
+  "homePath": "/opt/codexhome/accounts/main",
+  "provider": "openai",
+  "model": "gpt-5",
+  "endpointHost": "api.openai.com",
+  "hasAuth": true,
+  "hasConfig": true
+}

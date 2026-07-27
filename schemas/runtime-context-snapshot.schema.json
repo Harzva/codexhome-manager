@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/runtime-context-snapshot.schema.json",
+  "title": "CodexHome Runtime Context Snapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "attemptId",
+    "contextWindowTokens",
+    "skillCatalogTokens",
+    "loadedSkillBodyTokens",
+    "agentsTokens",
+    "rulesTokens",
+    "toolSchemaTokens",
+    "conversationHistoryTokens",
+    "cachedReuseTokens",
+    "loadedSkillIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "codexhome.runtime-context-snapshot.v1" },
+    "runId": { "$ref": "account-profile.schema.json#/$defs/id" },
+    "attemptId": { "$ref": "account-profile.schema.json#/$defs/id" },
+    "contextWindowTokens": { "type": "integer", "minimum": 1 },
+    "skillCatalogTokens": { "type": "integer", "minimum": 0 },
+    "loadedSkillBodyTokens": { "type": "integer", "minimum": 0 },
+    "agentsTokens": { "type": "integer", "minimum": 0 },
+    "rulesTokens": { "type": "integer", "minimum": 0 },
+    "toolSchemaTokens": { "type": "integer", "minimum": 0 },
+    "conversationHistoryTokens": { "type": "integer", "minimum": 0 },
+    "cachedReuseTokens": { "type": "integer", "minimum": 0 },
+    "loadedSkillIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "account-profile.schema.json#/$defs/id" }
+    }
+  }
+}

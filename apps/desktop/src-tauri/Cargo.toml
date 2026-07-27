@@ -1,6 +1,6 @@
 [package]
 name = "codexhome-desktop"
-version = "0.2.0-alpha.1"
+version = "0.3.0-alpha.1"
 description = "Desktop manager for specialized Codex Homes"
 authors = ["Harzva"]
 edition = "2021"

@@ -2,27 +2,26 @@
 
 [![CI](https://github.com/harzva/codexhome-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/harzva/codexhome-manager/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-176b50.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0--alpha.1-8a5a20.svg)](RELEASE_NOTES.md)
+[![Version](https://img.shields.io/badge/version-0.3.0--alpha.1-8a5a20.svg)](RELEASE_NOTES.md)
 
-**One machine, many specialist Codex families.**
+**Compose one Codex runtime from identity, expertise, and project context.**
 
-CodexHome Manager helps Codex power users discover, separate, label, clone, and manage multiple `CODEX_HOME` directories as isolated Skill Spaces and specialized Agent Households.
+CodexHome Manager is the public-safe control plane for Account Profiles, reusable Expert Packs, Project Bindings, Skill Registry entries, and hard-isolated Codex runtimes. Existing `CODEX_HOME` directories remain supported through an explicit `LegacyHome` compatibility layer.
 
-> Status: v0.2 alpha. Discovery, registry aliases, safe Home lifecycle commands, append-only observability, durable Agent Run projections, explainable routing, Scheduler v1 control-plane primitives, and the connected Desktop UI work. External process execution, Skill placement, and MCP routing remain roadmap work.
+> Status: v0.3 alpha. Account + Expert + Project resolution and real Runtime Projection are available alongside discovery, durable Agent Runs, observability, routing, worktree gates, Scheduler primitives, and the Tauri Desktop adapter. Process launch and remote package distribution remain roadmap work.
 
 ## Why
 
-A single Codex Home can accumulate too many Skills, MCP servers, Rules, Hooks, providers, and sessions. CodexHome Manager keeps these capabilities separated:
+A single Codex Home can mix identity, credentials, hundreds of Skills, MCP servers, Rules, and project instructions. CodexHome Manager separates those concerns:
 
 ```text
-Main Home
-├─ @frontend  UI Skills + browser/Figma MCP
-├─ @research  research and data Skills
-├─ @reviewer  read-only review Skills
-└─ @ops       CI and release Skills
+Account Profile       Expert Pack          Project Binding
+auth/provider/model + research capabilities + project-local rules
+          \                 |                 /
+           +------ Effective Runtime -------+
 ```
 
-The main Home can stay small and delegate work to a specialized Home when needed.
+This avoids copying one complete directory for every account × expert × project combination.
 
 ## Current capabilities
 
@@ -56,6 +55,13 @@ The main Home can stay small and delegate work to a specialized Home when needed
 - Dispatch atomically with priority, dependencies, time windows, budgets, concurrency limits, Route evidence, and leases.
 - Defer unavailable, rate-limited, quota-exhausted, or unhealthy Homes with explainable fallback evidence.
 - Renew long-task leases and require explicit recovery before retrying expired work.
+- Resolve `AccountProfile + ExpertPack[] + ProjectBinding` into a deterministic Effective Runtime Manifest.
+- Preserve old registries through `LegacyHome` without extending the legacy contract.
+- Register versioned Skills by logical ID, source, digest, and context estimate.
+- Plan, apply, verify, and clean Skill projections under manager-owned roots.
+- Link Account auth/config into hard runtimes without reading or copying credential contents.
+- Force Expert Packs that require isolation, including Agent Households, into separate runtime directories.
+- Report static Skill catalog/body, AGENTS, Rules, and tool-schema context estimates.
 
 ## Five-minute quickstart
 
@@ -123,6 +129,19 @@ codexhome run worktree prepare <run-id> <attempt-id> --repository /path/to/repo 
 codexhome run worktree evidence <run-id> <attempt-id> --test-label tests --test-program cargo -- test --workspace
 codexhome run worktree review <run-id> <attempt-id> <evidence-id> --decision approved --reason reviewed --home-id home-review --model reviewer-model
 codexhome run worktree conflict-check <run-id> <attempt-id> <evidence-id> --target-ref main --home-id home-review --model reviewer-model
+codexhome environment resolve examples/project-binding.example.json \
+  --account-profile examples/account-profile.example.json \
+  --expert-pack examples/expert-pack.example.json \
+  --skill-registry examples/skill-registry.example.json \
+  --runtime-root /absolute/path/to/runtimes \
+  --output runtime.json --json
+codexhome projection plan runtime.json --json
+codexhome projection apply runtime.json --dry-run --json
+codexhome projection apply runtime.json --json
+codexhome projection verify runtime.json --json
+codexhome environment context-inspect examples/runtime-context-snapshot.example.json --json
+codexhome skill digest /absolute/path/to/skill --json
+codexhome skill validate examples/skill-registry.example.json --json
 ```
 
 Clone Skills, Rules, and Hooks only after reviewing the source Home:
@@ -160,13 +179,13 @@ Registry path precedence is `--registry`, then `CODEXHOME_REGISTRY`, then `~/.co
 
 `--json` writes only JSON to stdout. Progress and diagnostics must never corrupt the JSON stream. Reports exclude credential values but include local Home paths and provider hostnames, so review them before sharing publicly.
 
-The discovery schema is `codexhome.discovery.v1`; v0.2 adds `codexhome.registry.v1`, `codexhome.registry-report.v1`, `codexhome.home-mutation.v1`, the strict `codexhome.observability-event.v1` / `codexhome.observability-summary.v1` contracts, `codexhome.agent-runs.v1` / `codexhome.agent-run-mutation.v1`, `codexhome.route-request.v1` / `codexhome.route-policy.v1` / `codexhome.route-decision.v1`, `codexhome.scheduler-job.v1` / `codexhome.scheduler-policy.v1` / Scheduler output contracts, and versioned worktree plan/evidence/conflict contracts.
+The v0.3 environment boundary is `codexhome.account-profile.v1`, `codexhome.expert-pack.v1`, `codexhome.project-binding.v1`, `codexhome.skill-registry.v1`, `codexhome.effective-runtime.v1`, and `codexhome.runtime-projection.v1`. Existing v0.2 registry, observability, Agent Run, route, Scheduler, and worktree contracts remain supported.
 
 Agent Run and Scheduler state are projected from the same append-only observability stream, so queue state, cost analysis, and lifecycle state cannot silently drift. The stream excludes prompts, responses, credential values, arbitrary payloads, raw tool arguments, and artifact paths. See [docs/observability.md](docs/observability.md), [docs/agent-runs.md](docs/agent-runs.md), and [docs/scheduler.md](docs/scheduler.md).
 
 ## Security
 
-CodexHome Manager never reads the contents of `auth.json`. It parses `config.toml` locally, retains only allowlisted non-secret fields in its report, and reduces provider URLs to hostnames.
+CodexHome Manager never reads the contents of `auth.json`. Hard runtimes may link the selected Account Profile's auth/config files, but Project Bindings and Expert Packs cannot contain or copy account credentials.
 
 Third-party provider execution, Skill installation, MCP changes, Hooks, and child-agent delegation will require explicit policy and confirmation in later milestones.
 
@@ -193,7 +212,8 @@ For frontend-only development, use `npm run dev`. See [docs/troubleshooting.md](
 ## Documentation
 
 - [Architecture and trust boundaries](docs/architecture.md)
-- [Registry format and lifecycle semantics](docs/registry.md)
+- [Effective environment and runtime projection](docs/effective-environment.md)
+- [Registry format and legacy lifecycle semantics](docs/registry.md)
 - [Desktop adapter contract](docs/desktop-api.md)
 - [Observability event and metric contract](docs/observability.md)
 - [Agent Run lifecycle and recovery contract](docs/agent-runs.md)

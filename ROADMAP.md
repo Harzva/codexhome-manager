@@ -64,15 +64,18 @@ versions.
 - Lease renewal plus explicit expired-worker recovery before retry.
 - Versioned Scheduler job, policy, report, mutation, dispatch, tick, event, and summary schemas.
 
-## v0.3 — Skill placement
+## v0.3 — Environment composition and Runtime Projection
 
-- Skill Space manifests and capacity budgets.
-- Shared Skill Pack references and lockfile.
-- Skill Classifier.
-- Hard-constraint validation.
-- Top-three Home recommendations with explainable scores.
-- Dry-run, explicit placement confirmation, verification, and rollback.
-- Unclassified inbox and new-Home recommendation.
+- Account Profile for auth/provider/model/endpoint only.
+- Backward-compatible `LegacyHome` projection over existing registries.
+- Reusable Expert Packs for Skills, Rules, AGENTS instructions, MCP declarations, and context estimates.
+- Project Bindings for project-local capability overlays without credentials.
+- Deterministic Effective Runtime Manifest resolution.
+- Skill Registry entries with logical IDs, versions, source paths, digests, and context estimates.
+- Dry-run-first Runtime Projection with apply, verify, clean, and rollback.
+- Hard-isolated Agent Household runtimes with Account auth/config references, separate Skills, sessions, token/cost attribution, and runtime roots.
+- Static Home context budgets and a runtime context snapshot contract for Run Inspector.
+- Shared package references and lockfile remain follow-up work.
 
 ## v0.4 — Execution engine
 
@@ -80,12 +83,12 @@ versions.
 - Process capture and final-result adapters on top of isolated worktrees.
 - Translate Scheduler leases, timeout/cancellation state, and review gates into process signals.
 
-## v0.5 — Agent Household
+## v0.5 — Agent Household orchestration
 
-- Household Manifest and reusable member templates.
-- Complexity-based Member Plans.
+- Household Manifest references Expert Packs rather than complete Homes.
+- Complexity-based Member Plans over hard-isolated Effective Runtimes.
 - Planner, Executor, Tester, and Reviewer members.
-- L0/L1/L2 depth limit, Budget Guard, and Artifact Aggregator.
+- L0/L1/L2 depth limit, Budget Guard, Artifact Aggregator, and per-member context/cost attribution.
 
 ## v0.6 — MCP delegation
 

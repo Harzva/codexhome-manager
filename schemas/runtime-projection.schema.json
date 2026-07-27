@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/harzva/codexhome-manager/schemas/runtime-projection.schema.json",
+  "title": "CodexHome Runtime Projection Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ok",
+    "schemaVersion",
+    "manifestId",
+    "dryRun",
+    "verified",
+    "entries",
+    "safety"
+  ],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "schemaVersion": { "const": "codexhome.runtime-projection.v1" },
+    "manifestId": { "type": "string" },
+    "dryRun": { "type": "boolean" },
+    "verified": { "type": "boolean" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "sourcePath",
+          "targetPath",
+          "mode",
+          "operation",
+          "required"
+        ],
+        "properties": {
+          "kind": { "enum": ["skill", "account_auth", "account_config"] },
+          "sourcePath": { "type": "string" },
+          "targetPath": { "type": "string" },
+          "mode": { "enum": ["symlink", "copy"] },
+          "operation": {
+            "enum": ["create", "replace", "keep", "skip_missing_optional"]
+          },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "safety": { "$ref": "effective-runtime.schema.json#/properties/safety" }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "codexhome.project-binding.v1",
+  "id": "binding-paper-crop",
+  "projectId": "paper-crop",
+  "projectRoot": "/work/paper-crop",
+  "accountProfileId": "account-main",
+  "expertPackIds": ["expert-research"],
+  "isolation": "hard"
+}

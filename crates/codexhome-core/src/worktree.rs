@@ -9,14 +9,17 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::time::Instant;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+use tempfile::NamedTempFile;
 
 pub const WORKTREE_PLAN_SCHEMA_VERSION: &str = "codexhome.worktree-plan.v1";
 pub const WORKTREE_PREPARE_SCHEMA_VERSION: &str = "codexhome.worktree-prepare.v1";
 pub const WORKTREE_EVIDENCE_SCHEMA_VERSION: &str = "codexhome.worktree-evidence.v1";
 pub const WORKTREE_CONFLICT_SCHEMA_VERSION: &str = "codexhome.worktree-conflict.v1";
 const MAX_TEST_LOG_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_TEST_TIMEOUT_MS: u64 = 15 * 60 * 1_000;
 
 #[derive(Debug, Clone)]
 pub struct WorktreeAssignment {
@@ -69,6 +72,7 @@ pub struct WorktreeEvidenceOptions {
     pub test_label: String,
     pub test_program: String,
     pub test_args: Vec<String>,
+    pub test_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -251,6 +255,9 @@ impl GitWorktreeManager {
         {
             bail!("testProgram is invalid");
         }
+        if options.test_timeout_ms == 0 || options.test_timeout_ms > 24 * 60 * 60 * 1_000 {
+            bail!("testTimeoutMs must be within 1..=86400000");
+        }
         let worktree_path = verify_prepared_worktree(plan)?;
         let head_commit = git_stdout(&worktree_path, ["rev-parse", "HEAD"])?;
         validate_commit_id(&head_commit)?;
@@ -283,19 +290,68 @@ impl GitWorktreeManager {
             diff_statistics(&worktree_path, &plan.base_commit, &head_commit)?;
 
         let started = Instant::now();
-        let test = Command::new(&options.test_program)
+        let stdout_file = NamedTempFile::new().context("failed to create temporary test stdout")?;
+        let stderr_file = NamedTempFile::new().context("failed to create temporary test stderr")?;
+        let mut child = Command::new(&options.test_program)
             .args(&options.test_args)
             .current_dir(&worktree_path)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(
+                stdout_file
+                    .as_file()
+                    .try_clone()
+                    .context("failed to clone temporary test stdout")?,
+            ))
+            .stderr(Stdio::from(
+                stderr_file
+                    .as_file()
+                    .try_clone()
+                    .context("failed to clone temporary test stderr")?,
+            ))
+            .spawn()
             .with_context(|| format!("failed to execute test '{}'", options.test_label))?;
+        let deadline = started + Duration::from_millis(options.test_timeout_ms);
+        let (test_status, timed_out) = loop {
+            if let Some(status) = child
+                .try_wait()
+                .context("failed to poll worktree evidence test")?
+            {
+                break (status, false);
+            }
+            if Instant::now() >= deadline {
+                child.kill().context("failed to terminate timed-out test")?;
+                let status = child
+                    .wait()
+                    .context("failed to reap timed-out evidence test")?;
+                break (status, true);
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
         let test_duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let test_exit_code = test.status.code().unwrap_or(-1);
-        let mut test_log = Vec::with_capacity(test.stdout.len().saturating_add(test.stderr.len()));
-        test_log.extend_from_slice(&test.stdout);
-        if !test.stdout.is_empty() && !test.stderr.is_empty() {
+        let test_exit_code = if timed_out {
+            -1
+        } else {
+            test_status.code().unwrap_or(-1)
+        };
+        let stdout =
+            fs::read(stdout_file.path()).context("failed to read temporary test stdout")?;
+        let stderr =
+            fs::read(stderr_file.path()).context("failed to read temporary test stderr")?;
+        let mut test_log = Vec::with_capacity(stdout.len().saturating_add(stderr.len()));
+        test_log.extend_from_slice(&stdout);
+        if !stdout.is_empty() && !stderr.is_empty() {
             test_log.push(b'\n');
         }
-        test_log.extend_from_slice(&test.stderr);
+        test_log.extend_from_slice(&stderr);
+        if timed_out {
+            test_log.extend_from_slice(
+                format!(
+                    "\n[codexhome] test timed out after {} ms\n",
+                    options.test_timeout_ms
+                )
+                .as_bytes(),
+            );
+        }
         test_log.truncate(MAX_TEST_LOG_BYTES);
 
         let status = git_bytes(&worktree_path, ["status", "--porcelain=v1"])?;
@@ -341,7 +397,7 @@ impl GitWorktreeManager {
                 insertions,
                 deletions,
                 worktree_clean,
-                tests_succeeded: test.status.success(),
+                tests_succeeded: !timed_out && test_status.success(),
                 test_label: options.test_label.clone(),
                 test_exit_code,
                 test_duration_ms,
@@ -874,6 +930,7 @@ mod tests {
                 test_label: "true smoke".to_owned(),
                 test_program: "/usr/bin/true".to_owned(),
                 test_args: Vec::new(),
+                test_timeout_ms: DEFAULT_TEST_TIMEOUT_MS,
             },
         )
         .expect("evidence");
